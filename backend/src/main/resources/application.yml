@@ -1,0 +1,104 @@
+server:
+  port: 8180
+
+spring:
+  application:
+    name: srs-live-platform
+
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:mysql-server}:3306/srs_live?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root@123456}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 5000
+      max-lifetime: 600000
+
+  data:
+    redis:
+      host: ${REDIS_HOST:redis-server}
+      port: 16379
+      password: ${REDIS_PASSWORD:lmw121+_}
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 32
+          max-idle: 8
+          min-idle: 4
+          max-wait: 3000ms
+
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    serialization:
+      write-dates-as-timestamps: false
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/*.xml
+  type-aliases-package: com.srs.live.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ===== 业务配置 =====
+srs:
+  # 当前节点ID，多实例需唯一
+  node-id: ${NODE_ID:ws-node-1}
+
+  # JWT 配置
+  jwt:
+    secret: ${JWT_SECRET:srs-live-platform-jwt-secret-key-2024}
+    expiration: 7200
+
+  # SRS 媒体服务器
+  srs:
+    api-password: ${SRS_API_PASSWORD:admin}
+    # 统一入口域名（Nginx 反向代理），生产环境必填，为空则使用节点 IP
+    entrypoint: ${SRS_ENTRYPOINT:}
+    # WebRTC 端口（统一入口使用）
+    rtc-port: ${SRS_RTC_PORT:8000}
+    # 候选地址（WebRTC 用，留空自动获取）
+    candidate: ${SRS_CANDIDATE:}
+
+  # WebSocket 配置
+  websocket:
+    boss-threads: 1
+    worker-threads: 8
+    max-frame-size: 65536
+    idle-timeout: 60000
+
+  # 集群配置
+  cluster:
+    health-check-interval: 10000
+    heartbeat-timeout: 45000
+    heartbeat-scan-interval: 10000
+
+  # 限流配置
+  rate-limit:
+    ws-message: 10
+    api-per-minute: 1000
+
+  # 第三方服务
+  third-party:
+    auth-enabled: true
+    timestamp-tolerance: 300000
+
+# MinIO 对象存储（录播文件）
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket: ${MINIO_BUCKET:live-recordings}
+
+logging:
+  level:
+    com.srs.live: INFO
