@@ -59,13 +59,41 @@ srs:
     secret: ${JWT_SECRET:srs-live-platform-jwt-secret-key-2024}
     expiration: 7200
 
-  # SRS 媒体服务器
+  # SRS 媒体服务器配置
   srs:
     api-password: ${SRS_API_PASSWORD:admin}
-    # 统一入口域名（Nginx 反向代理），生产环境必填，为空则使用节点 IP
-    entrypoint: ${SRS_ENTRYPOINT:}
-    # WebRTC 端口（统一入口使用）
-    rtc-port: ${SRS_RTC_PORT:8000}
+    # ============================================
+    # SRS 运行模式: separate(分离模式) 或 unified(统一模式)
+    # ============================================
+    # separate: 直播/录制节点分离，高资源推荐
+    #   - 2个 srs-proxy 实例 (srs-proxy-live / srs-proxy-record)
+    #   - origin-1 (直播, DVR off) / origin-2 (录制, DVR on)
+    #   - Java 后端根据 nodeType 路由到不同 proxy
+    #
+    # unified: 直播/录制共用同一套 SRS，低资源兼容
+    #   - 1个 srs-proxy 实例
+    #   - 所有 Origin 节点都开启 DVR (直播也录制)
+    #   - Java 后端不区分 nodeType，统一调度
+    # ============================================
+    mode: ${SRS_MODE:unified}
+    
+    # ============================================
+    # 统一模式配置 (unified mode)
+    # ============================================
+    # 单 srs-proxy 地址（所有流都经过此 proxy）
+    unified-proxy-host: ${SRS_UNIFIED_PROXY_HOST:srs-proxy}
+    unified-proxy-port: ${SRS_UNIFIED_PROXY_PORT:8000}
+    
+    # ============================================
+    # 分离模式配置 (separate mode)
+    # ============================================
+    # 直播节点代理：srs-proxy-live，端口 1935/8080/1985/8000
+    # 录制节点代理：srs-proxy-record，端口 1936/8081/1986/8001
+    live-proxy-host: ${SRS_LIVE_PROXY_HOST:srs-proxy-live}
+    live-proxy-port: ${SRS_LIVE_PROXY_PORT:8000}
+    record-proxy-host: ${SRS_RECORD_PROXY_HOST:srs-proxy-record}
+    record-proxy-port: ${SRS_RECORD_PROXY_PORT:8001}
+    
     # 候选地址（WebRTC 用，留空自动获取）
     candidate: ${SRS_CANDIDATE:}
 

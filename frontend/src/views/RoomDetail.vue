@@ -16,6 +16,18 @@
           <span class="status-badge" :class="room.status">{{ statusMap[room.status] }}</span>
           <span v-if="currentMode === 'viewer'" class="mode-badge">观众端</span>
           <span v-if="currentMode === 'publisher'" class="mode-badge publisher">主播端</span>
+          <!-- 录播状态 -->
+          <span v-if="room.status === 'live'" class="record-status">
+            <template v-if="localRecording && serverRecording">
+              <span class="record-dot"></span>本地+服务器录播中
+            </template>
+            <template v-else-if="localRecording">
+              <span class="record-dot"></span>本地录播中
+            </template>
+            <template v-else-if="serverRecording">
+              <span class="record-dot"></span>服务器录播中
+            </template>
+          </span>
         </div>
         <p class="info-meta">
           房间ID: {{ room.roomId }} | 主播: {{ room.publisherDisplayName || room.publisherUid }}
@@ -27,15 +39,29 @@
               <button class="btn btn-success" @click="handleStartLive" :disabled="liveLoading">
                 {{ liveLoading ? '开播中...' : '开始直播' }}
               </button>
-              <label class="record-toggle">
-                <input type="checkbox" v-model="serverRecording" />
-                服务器端录播
-              </label>
+              <!-- 录播选项 -->
+              <div class="record-options">
+                <label class="record-toggle">
+                  <input type="checkbox" v-model="localRecordEnabled" />
+                  本地录播
+                </label>
+                <label class="record-toggle">
+                  <input type="checkbox" v-model="serverRecordEnabled" />
+                  服务器录播
+                </label>
+              </div>
+              <!-- 画质选择 -->
+              <div class="quality-select">
+                <label>画质:</label>
+                <select v-model="selectedQuality" :disabled="room.status === 'live'">
+                  <option v-for="q in VIDEO_QUALITIES" :key="q.label" :value="q">{{ q.label }}</option>
+                </select>
+              </div>
             </template>
             <button v-if="room.status === 'live'" class="btn btn-danger" @click="handleStopLive">结束直播</button>
           </template>
           <button class="btn" @click="showShare = true">分享链接</button>
-          <button class="btn" @click="router.push('/rooms')">返回列表</button>
+          <button class="btn" @click="confirmLeave">返回列表</button>
         </div>
       </div>
 
@@ -53,7 +79,7 @@
       <div class="room-content">
         <!-- 主播端：摄像头预览 + 推流 -->
         <div v-if="isPublisherMode" class="video-section">
-          <div class="video-container card" :class="{ live: room.status === 'live' }">
+          <div class="video-container card" :class="{ live: room.status === 'live' }" ref="publisherContainer">
             <video ref="publisherVideo" class="main-video" autoplay playsinline muted></video>
             <div v-if="room.status === 'waiting'" class="video-overlay">
               <p>点击上方「开始直播」按钮开启摄像头并推流</p>
@@ -65,6 +91,12 @@
             <div v-if="localRecording" class="local-record-indicator">
               <span class="record-dot"></span> 本地录制中
             </div>
+            <!-- 全屏按钮 -->
+            <button class="fullscreen-btn" @click="toggleFullscreen('publisher')" title="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+            </button>
           </div>
 
           <!-- 主播控制栏 -->
@@ -101,7 +133,7 @@
 
         <!-- 观众端：视频播放器 -->
         <div v-if="isViewerMode" class="video-section">
-          <div class="video-container card">
+          <div class="video-container card" ref="viewerContainer">
             <video ref="viewerVideo" class="main-video" autoplay playsinline></video>
             <div v-if="room.status === 'waiting'" class="video-overlay">
               <p>直播尚未开始，请稍候...</p>
@@ -109,6 +141,12 @@
             <div v-if="room.status === 'live'" class="live-indicator">
               <span class="dot"></span> 直播中
             </div>
+            <!-- 全屏按钮 -->
+            <button class="fullscreen-btn" @click="toggleFullscreen('viewer')" title="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -158,7 +196,7 @@ import { getRoom, startLive, stopLive, getRoomUsers, kickUser, updateRoom, getPl
 import { getUser } from '../api/user'
 import { useAuthStore } from '../store'
 import { getWsClient, connectWs } from '../utils/ws'
-import { startWhipPublish, startWhepPlay, type WhipPublisher } from '../utils/rtc'
+import { startWhipPublish, startWhepPlay, type WhipPublisher, VIDEO_QUALITIES, type VideoQuality } from '../utils/rtc'
 
 const route = useRoute()
 const router = useRouter()
@@ -172,6 +210,11 @@ const editTitleValue = ref('')
 const showShare = ref(false)
 const publisherVideo = ref<HTMLVideoElement | null>(null)
 const viewerVideo = ref<HTMLVideoElement | null>(null)
+const publisherContainer = ref<HTMLDivElement | null>(null)
+const viewerContainer = ref<HTMLDivElement | null>(null)
+
+// 画质选择
+const selectedQuality = ref<VideoQuality>(VIDEO_QUALITIES[1]) // 默认标清
 
 // 当前模式
 const currentMode = computed(() => {
@@ -280,6 +323,17 @@ function retryDevice() {
   checkDevices()
 }
 
+// 全屏切换
+function toggleFullscreen(type: 'publisher' | 'viewer') {
+  const el = type === 'publisher' ? publisherContainer.value : viewerContainer.value
+  if (!el) return
+  if (document.fullscreenElement) {
+    document.exitFullscreen()
+  } else {
+    el.requestFullscreen()
+  }
+}
+
 // ============ WHIP 推流相关 ============
 let publisher: WhipPublisher | null = null
 let publisherCleanup: (() => void) | null = null
@@ -291,6 +345,10 @@ const localRecording = ref(false)
 const localRecordBlob = ref<Blob | null>(null)
 const localRecordUrl = ref('')
 const serverRecording = ref(false)
+
+// 录播选项（开播前选择）
+const localRecordEnabled = ref(false)
+const serverRecordEnabled = ref(false)
 
 // 本地录播转码 MP4 相关
 const converting = ref(false)
@@ -307,7 +365,7 @@ async function handleStartLive() {
 
   liveLoading.value = true
   try {
-    const res: any = await startLive(route.params.roomId as string, serverRecording.value)
+    const res: any = await startLive(route.params.roomId as string, serverRecordEnabled.value)
     const { whipUrl } = res.data
     await loadRoom()
 
@@ -316,9 +374,19 @@ async function handleStartLive() {
       publisher = await startWhipPublish(whipUrl, publisherVideo.value, {
         enableCamera: true,
         enableMicrophone: true,
-        publisherName: authStore.username || '主播'
+        publisherName: authStore.username || '主播',
+        quality: selectedQuality.value
       })
       publisherCleanup = publisher.stop
+
+      // 如果选择了本地录播，自动开始录制
+      if (localRecordEnabled.value && publisher) {
+        publisher.startLocalRecord()
+        localRecording.value = true
+      }
+
+      // 设置服务器录播状态
+      serverRecording.value = serverRecordEnabled.value
     }
   } catch (e: any) {
     console.error('start live error', e)
@@ -477,6 +545,19 @@ function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).then(() => alert('已复制到剪贴板'))
 }
 
+// 退出直播间确认
+function confirmLeave() {
+  if (room.value?.status === 'live' && (localRecording.value || serverRecording.value)) {
+    const msg = localRecording.value && serverRecording.value
+      ? '当前正在本地录播和服务器录播中，退出后录制将停止/保存，是否确认退出？'
+      : localRecording.value
+        ? '当前正在本地录播中，退出后录制将停止/保存，是否确认退出？'
+        : '当前正在服务器录播中，退出后录制将停止/保存，是否确认退出？'
+    if (!confirm(msg)) return
+  }
+  router.push('/rooms')
+}
+
 let wsClient: any = null
 onMounted(() => {
   loadRoom()
@@ -532,56 +613,175 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.room-detail-page { padding: 20px; max-width: 1200px; margin: 0 auto; }
-.card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-.room-info { margin-bottom: 16px; }
-.info-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
-.info-header h2 { font-size: 22px; margin: 0; }
-.title-row { display: flex; align-items: center; gap: 8px; }
+/* === 全局直播布局：铺满视口 === */
+.room-detail-page {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #0d0d1a;
+}
+
+/* 主要内容区 */
+.room-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.card {
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* 顶部信息栏 */
+.room-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(13, 13, 26, 0.95);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  color: #fff;
+  flex-shrink: 0;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.info-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.info-header h2 { font-size: 18px; margin: 0; color: #fff; }
+.title-row { display: flex; align-items: center; gap: 6px; }
 .title-edit-row { display: flex; align-items: center; gap: 6px; }
-.title-input { width: 300px; padding: 4px 8px; }
-.status-badge { padding: 2px 12px; border-radius: 10px; font-size: 12px; }
+.title-input { width: 200px; padding: 4px 8px; font-size: 13px; }
+.status-badge { padding: 2px 10px; border-radius: 10px; font-size: 11px; font-weight: 500; }
 .status-badge.live { background: #27ae60; color: #fff; }
 .status-badge.waiting { background: #f39c12; color: #fff; }
 .status-badge.closed { background: #95a5a6; color: #fff; }
-.mode-badge { padding: 2px 10px; border-radius: 6px; font-size: 12px; background: #e74c3c; color: #fff; }
+.mode-badge { padding: 2px 8px; border-radius: 6px; font-size: 11px; background: #e74c3c; color: #fff; }
 .mode-badge.publisher { background: #3498db; }
-.info-meta { font-size: 13px; color: #888; margin-bottom: 12px; }
-.info-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.info-meta { font-size: 12px; color: #888; margin: 0; }
+.info-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.quality-select { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #aaa; }
+.quality-select select { padding: 3px 6px; font-size: 12px; background: #1a1a2e; color: #fff; border: 1px solid #333; border-radius: 4px; }
 
 /* 设备异常提示 */
 .device-error {
-  margin-bottom: 16px;
   display: flex;
   align-items: center;
   gap: 12px;
   background: #fff3cd;
   border: 1px solid #ffc107;
   color: #856404;
+  padding: 10px 16px;
+  flex-shrink: 0;
 }
-.error-icon { font-size: 24px; }
+.error-icon { font-size: 20px; }
 .error-content { flex: 1; }
-.error-content strong { display: block; margin-bottom: 4px; }
-.error-content p { margin: 0 0 8px 0; font-size: 13px; }
+.error-content strong { display: block; margin-bottom: 2px; font-size: 14px; }
+.error-content p { margin: 0 0 6px 0; font-size: 12px; }
 
-.room-content { display: flex; gap: 16px; margin-top: 16px; }
-.video-section { flex: 1; min-width: 0; }
-.video-container { position: relative; background: #000; min-height: 400px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.main-video { width: 100%; height: 100%; max-height: 500px; object-fit: contain; }
-.video-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: #fff; background: rgba(0,0,0,0.6); text-align: center; padding: 20px; }
-.live-indicator { position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 6px; color: #fff; background: rgba(231, 76, 60, 0.8); padding: 4px 10px; border-radius: 4px; font-size: 13px; }
-.local-record-indicator { position: absolute; top: 10px; right: 10px; display: flex; align-items: center; gap: 6px; color: #fff; background: rgba(231, 76, 60, 0.8); padding: 4px 10px; border-radius: 4px; font-size: 13px; }
+/* 主内容区：视频 + 侧边栏 */
+.room-content {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* 视频区域 */
+.video-section {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.video-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.main-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.video-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0,0,0,0.6);
+  text-align: center;
+  padding: 20px;
+  font-size: 14px;
+}
+
+.live-indicator {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  background: rgba(231, 76, 60, 0.85);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.local-record-indicator {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  background: rgba(231, 76, 60, 0.85);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
 .record-dot { width: 8px; height: 8px; background: #ff0000; border-radius: 50%; animation: blink 1s infinite; }
+.record-status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 6px; font-size: 11px; background: #e74c3c; color: #fff; }
 .dot { width: 8px; height: 8px; background: #fff; border-radius: 50%; animation: blink 1s infinite; }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* 媒体控制栏 */
 .media-controls {
-  margin-top: 12px;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
   align-items: center;
+  padding: 10px 16px;
+  background: rgba(13, 13, 26, 0.95);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
 }
 .media-controls .control-group {
   display: flex;
@@ -612,45 +812,79 @@ onUnmounted(() => {
   border-radius: 3px;
   transition: width 0.3s;
 }
-.progress-text {
-  white-space: nowrap;
-}
+.progress-text { white-space: nowrap; }
 
 /* 服务器端录播开关 */
 .record-toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
-  color: #666;
+  font-size: 12px;
+  color: #aaa;
   cursor: pointer;
 }
-.record-toggle input {
-  margin: 0;
+.record-toggle input { margin: 0; }
+
+/* 录播选项组 */
+.record-options { display: flex; gap: 12px; align-items: center; }
+
+/* 侧边栏 */
+.sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: rgba(13, 13, 26, 0.95);
+  border-left: 1px solid rgba(255,255,255,0.08);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
 }
-.sidebar { width: 300px; min-width: 300px; }
-.sidebar h3 { margin: 0 0 12px 0; font-size: 16px; }
-.empty-users { color: #999; padding: 20px; text-align: center; }
+.sidebar h3 { margin: 0; padding: 12px 16px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.empty-users { color: #888; padding: 20px; text-align: center; font-size: 13px; }
 .user-list { list-style: none; padding: 0; margin: 0; }
-.user-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+.user-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 13px; color: #ddd; }
 .user-item:last-child { border-bottom: none; }
 
-.btn { padding: 6px 16px; border: 1px solid #ddd; border-radius: 4px; background: #fff; cursor: pointer; font-size: 14px; text-decoration: none; display: inline-block; }
-.btn:hover { background: #f5f5f5; }
+/* 按钮样式 */
+.btn { padding: 5px 12px; border: 1px solid #444; border-radius: 4px; background: #1a1a2e; color: #ddd; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.btn:hover { background: #2a2a3e; }
 .btn-primary { background: #3498db; color: #fff; border-color: #3498db; }
 .btn-primary:hover { background: #2980b9; }
 .btn-success { background: #27ae60; color: #fff; border-color: #27ae60; }
 .btn-success:hover { background: #219a52; }
 .btn-danger { background: #e74c3c; color: #fff; border-color: #e74c3c; }
 .btn-danger:hover { background: #c0392b; }
-.btn-sm { padding: 3px 10px; font-size: 12px; }
+.btn-sm { padding: 3px 8px; font-size: 12px; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .loading { text-align: center; padding: 60px; color: #999; }
 
+/* 全屏按钮 */
+.fullscreen-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.5);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s;
+  z-index: 10;
+}
+.fullscreen-btn:hover { background: rgba(0,0,0,0.8); }
+.video-container:hover .fullscreen-btn { opacity: 1; }
+.fullscreen-btn svg { width: 20px; height: 20px; }
+
 /* 分享弹窗 */
 .share-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.share-content { width: 500px; max-width: 90%; }
+.share-content { width: 500px; max-width: 90%; background: #fff; border-radius: 8px; padding: 24px; }
 .share-content h3 { margin: 0 0 16px 0; }
 .share-item { margin-bottom: 16px; }
 .share-item label { display: block; font-size: 13px; color: #666; margin-bottom: 6px; }

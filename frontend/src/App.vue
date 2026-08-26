@@ -1,6 +1,6 @@
 <template>
   <div id="app">
-    <header class="app-header">
+    <header v-if="!isSharedView" class="app-header">
       <div class="header-left">
         <h1 @click="goHome">SRS 直播平台</h1>
         <nav class="nav-links" v-if="authStore.isLoggedIn">
@@ -24,20 +24,32 @@
         </template>
       </div>
     </header>
-    <main class="app-main">
+    <main :class="{ 'no-header': isSharedView, 'fullscreen': isRoomDetail }" class="app-main">
       <router-view />
     </main>
-    <DebugPanel />
+    <DebugPanel v-if="!isSharedView" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useAuthStore } from './store'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import DebugPanel from './components/DebugPanel.vue'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
+
+// 分享出去的页面不显示顶部导航栏（通过 ?mode=viewer 或 ?mode=publisher 判断）
+const isSharedView = computed(() => {
+  return route.query.mode === 'viewer' || route.query.mode === 'publisher'
+})
+
+// 直播间详情页需要全屏布局
+const isRoomDetail = computed(() => {
+  return route.path.startsWith('/rooms/')
+})
 
 function goHome() {
   router.push('/')
@@ -61,6 +73,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .header-right { display: flex; align-items: center; gap: 12px; }
 .user-info { font-size: 14px; color: #aaa; }
 .app-main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.app-main.no-header { padding-top: 0; }
+.app-main.fullscreen { max-width: none; margin: 0; padding: 0; height: calc(100vh - 56px); overflow: hidden; }
+.app-main.fullscreen.no-header { height: 100vh; }
 .btn { display: inline-flex; align-items: center; justify-content: center; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; text-decoration: none; }
 .btn-sm { padding: 4px 12px; font-size: 13px; }
 .btn-primary { background: #4a90d9; color: #fff; }

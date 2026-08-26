@@ -60,10 +60,10 @@ public class RoomController {
 
     @PostMapping("/{roomId}/start")
     public ApiResponse<StartLiveResponse> startLive(@PathVariable String roomId,
-                                                     @RequestParam(defaultValue = "false") boolean recording,
+                                                     @RequestParam(defaultValue = "false") boolean serverRecording,
                                                      HttpServletRequest httpReq) {
         String uid = (String) httpReq.getAttribute("uid");
-        return ApiResponse.success(roomService.startLive(roomId, uid, recording));
+        return ApiResponse.success(roomService.startLive(roomId, uid, serverRecording));
     }
 
     @PostMapping("/{roomId}/stop")

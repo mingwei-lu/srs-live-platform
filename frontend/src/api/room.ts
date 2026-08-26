@@ -20,8 +20,8 @@ export function closeRoom(roomId: string) {
   return api.delete(`/rooms/${roomId}`)
 }
 
-export function startLive(roomId: string, recording: boolean = false) {
-  return api.post(`/rooms/${roomId}/start?recording=${recording}`)
+export function startLive(roomId: string, serverRecording: boolean = false) {
+  return api.post(`/rooms/${roomId}/start?serverRecording=${serverRecording}`)
 }
 
 export function stopLive(roomId: string) {

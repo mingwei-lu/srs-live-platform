@@ -12,6 +12,8 @@ public class SrsNode {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String nodeId;
+    /** 节点类型: live(直播节点) 或 record(录制节点) */
+    private String nodeType;
     private String ip;
     private Integer apiPort;
     private Integer rtcPort;

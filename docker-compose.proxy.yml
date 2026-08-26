@@ -1,0 +1,166 @@
+version: '3.8'
+
+# ============================================
+# SRS-Proxy 代理层 - Docker Compose 配置
+# 使用 SRS 官方 srs-proxy 作为统一入口代理
+# 
+# 架构说明：
+# - srs-proxy-live: 只代理直播节点（origin-1），端口 1935/8080/1985/8000
+# - srs-proxy-record: 只代理录制节点（origin-2），端口 1936/8081/1986/8001
+# - Origin 节点通过 cluster.proxy 主动注册到对应的 proxy
+# 
+# 依赖：外部 Redis（由 docker-compose.yml 提供）
+# ============================================
+
+services:
+  # ============================================
+  # SRS-Proxy for Live（直播节点代理）
+  # 功能：统一入口、负载均衡、路由到 origin-1
+  # ============================================
+  srs-proxy-live:
+    image: registry.cn-hangzhou.aliyuncs.com/ossrs/srs:7
+    container_name: srs-proxy-live
+    hostname: srs-proxy-live
+    restart: always
+    command: srs-proxy
+    
+    ports:
+      - "1935:1935/tcp"      # RTMP 代理入口（直播）
+      - "8080:8080/tcp"      # HTTP 代理入口（直播）
+      - "1985:1985/tcp"      # HTTP API 代理入口（直播）
+      - "8000:8000/udp"      # WebRTC UDP 代理入口（直播）
+      - "12025:12025/tcp"    # 系统 API / 管理接口
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    
+    environment:
+      # SRS Proxy 服务端口配置
+      - PROXY_RTMP_SERVER=1935
+      - PROXY_HTTP_SERVER=8080
+      - PROXY_HTTP_API=1985
+      - PROXY_WEBRTC_SERVER=8000
+      - PROXY_SRT_SERVER=10080
+      - PROXY_SYSTEM_API=12025
+      
+      # 负载均衡模式
+      # memory: 单机内存模式（无需 Redis，适合单节点测试）
+      # redis: 使用 Redis 共享节点状态（多节点部署推荐）
+      - PROXY_LOAD_BALANCER_TYPE=redis
+      
+      # Redis 配置（用于节点状态同步和负载均衡）
+      - PROXY_REDIS_HOST=redis
+      - PROXY_REDIS_PORT=6379
+      - PROXY_REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # WebRTC 候选地址（公网 IP）
+      - PROXY_CANDIDATE=${PUBLIC_IP}
+    
+    # 依赖 Redis（通过外部网络连接）
+    depends_on:
+      - redis
+    
+    networks:
+      - srs-network
+
+  # ============================================
+  # SRS-Proxy for Record（录制节点代理）
+  # 功能：统一入口、负载均衡、路由到 origin-2
+  # ============================================
+  srs-proxy-record:
+    image: registry.cn-hangzhou.aliyuncs.com/ossrs/srs:7
+    container_name: srs-proxy-record
+    hostname: srs-proxy-record
+    restart: always
+    command: srs-proxy
+    
+    ports:
+      - "1936:1935/tcp"      # RTMP 代理入口（录制）-> 映射到 1936
+      - "8081:8080/tcp"      # HTTP 代理入口（录制）-> 映射到 8081
+      - "1986:1985/tcp"      # HTTP API 代理入口（录制）-> 映射到 1986
+      - "8001:8000/udp"      # WebRTC UDP 代理入口（录制）-> 映射到 8001
+      - "12026:12025/tcp"    # 系统 API / 管理接口 -> 映射到 12026
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    
+    environment:
+      # SRS Proxy 服务端口配置
+      - PROXY_RTMP_SERVER=1935
+      - PROXY_HTTP_SERVER=8080
+      - PROXY_HTTP_API=1985
+      - PROXY_WEBRTC_SERVER=8000
+      - PROXY_SRT_SERVER=10080
+      - PROXY_SYSTEM_API=12025
+      
+      # 负载均衡模式
+      - PROXY_LOAD_BALANCER_TYPE=redis
+      
+      # Redis 配置（用于节点状态同步和负载均衡）
+      - PROXY_REDIS_HOST=redis
+      - PROXY_REDIS_PORT=6379
+      - PROXY_REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # WebRTC 候选地址（公网 IP）
+      - PROXY_CANDIDATE=${PUBLIC_IP}
+    
+    # 依赖 Redis（通过外部网络连接）
+    depends_on:
+      - redis
+    
+    networks:
+      - srs-network
+
+  # ============================================
+  # 可选：TURN 服务器（用于 WebRTC NAT 穿透）
+  # ============================================
+  turn-server:
+    image: coturn/coturn:latest
+    container_name: srs-turn
+    hostname: srs-turn
+    restart: unless-stopped
+    
+    ports:
+      - "3478:3478"          # TURN/STUN TCP
+      - "3478:3478/udp"      # TURN/STUN UDP
+      - "3479:3479"          # TURN/STUN TLS
+      - "49152-65535:49152-65535/udp"  # TURN relay 端口范围
+    
+    environment:
+      - LISTENING_PORT=3478
+      - EXTERNAL_IP=${PUBLIC_IP}
+      - REALM=srs-proxy.example.com
+      - USER=user1:pass1
+      - MIN_PORT=49152
+      - MAX_PORT=65535
+    
+    command: >
+      -n
+      --log-file=stdout
+      --external-ip=${PUBLIC_IP}
+      --realm=srs-proxy.example.com
+      --user=user1:pass1
+      --min-port=49152
+      --max-port=65535
+    
+    networks:
+      - srs-network
+
+# ============================================
+# 网络配置（使用外部网络，与 docker-compose.yml 共享）
+# ============================================
+networks:
+  srs-network:
+    external: true

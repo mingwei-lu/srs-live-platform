@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS `room` (
     `title` VARCHAR(200) NOT NULL DEFAULT '' COMMENT '直播间标题',
     `publisher_uid` VARCHAR(64) NOT NULL COMMENT '主播uid',
     `status` VARCHAR(20) NOT NULL DEFAULT 'waiting' COMMENT '状态: waiting/live/closed',
+    `node_type` VARCHAR(20) NULL DEFAULT 'live' COMMENT '节点类型: live(直播节点) 或 record(录制节点)',
     `srs_node` VARCHAR(64) NULL COMMENT '当前直播使用的SRS节点ID',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `started_at` DATETIME NULL COMMENT '最近开播时间',
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS `online_user` (
 CREATE TABLE IF NOT EXISTS `srs_node` (
     `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
     `node_id` VARCHAR(64) NOT NULL UNIQUE COMMENT '节点唯一标识',
+    `node_type` VARCHAR(20) NOT NULL DEFAULT 'live' COMMENT '节点类型: live(直播节点) 或 record(录制节点)',
     `ip` VARCHAR(64) NOT NULL COMMENT '节点IP地址',
     `api_port` INT NOT NULL DEFAULT 1985 COMMENT '1985 API端口',
     `rtc_port` INT NOT NULL DEFAULT 8000 COMMENT 'WebRTC端口',

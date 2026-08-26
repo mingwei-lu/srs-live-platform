@@ -85,21 +85,23 @@ public class RoomService {
             throw new BusinessException(40000, "room is not in waiting status");
         }
 
-        // 选择最优 SRS 节点
-        String srsNode = clusterService.selectOptimalNode(roomId);
+        // 根据录制开关选择节点类型和最优 SRS 节点
+        String nodeType = recordingEnabled ? "record" : "live";
+        String srsNode = clusterService.selectOptimalNode(roomId, nodeType);
         if (srsNode == null) {
             throw new BusinessException(50001, "no available SRS node");
         }
 
-        // 生成 WHIP 推流地址
+        // 生成 WHIP 推流地址（根据节点类型路由到对应的 srs-proxy）
         String streamId = room.getRoomId();
-        String whipUrl = clusterService.generateWhipUrl(srsNode, streamId, uid);
+        String whipUrl = clusterService.generateWhipUrl(srsNode, streamId, uid, nodeType);
 
         // 更新房间状态，并将当前用户设为主播（谁开播谁就是主播）
         room.setStatus(RoomStatus.LIVE.getCode());
         room.setStartedAt(LocalDateTime.now());
         room.setPublisherUid(uid);
         room.setSrsNode(srsNode);
+        room.setNodeType(nodeType);
         roomMapper.updateById(room);
 
         // 创建直播记录（含录播标记）
@@ -167,7 +169,9 @@ public class RoomService {
         if (room.getSrsNode() == null) {
             throw new BusinessException(50002, "no available SRS node");
         }
-        return clusterService.generateWhepUrl(room.getSrsNode(), room.getRoomId(), uid);
+        // 根据房间记录的节点类型路由到对应的 srs-proxy
+        String nodeType = room.getNodeType() != null ? room.getNodeType() : "live";
+        return clusterService.generateWhepUrl(room.getSrsNode(), room.getRoomId(), uid, nodeType);
     }
 
     private RoomResponse toResponse(Room room) {

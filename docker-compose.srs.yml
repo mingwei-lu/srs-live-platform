@@ -1,0 +1,117 @@
+version: '3.8'
+
+# ============================================
+# SRS 源站集群 - Docker Compose 配置
+# 包含：多个 Origin 源站节点（通过不同配置区分直播/录制）
+# 依赖：外部 Redis（由 docker-compose.yml 提供）
+# ============================================
+
+services:
+  # ============================================
+  # Origin 源站节点 1（直播节点）
+  # ============================================
+  origin-1:
+    image: registry.cn-hangzhou.aliyuncs.com/ossrs/srs:v7.0.78
+    container_name: srs-origin-1
+    hostname: origin-1
+    restart: always
+    
+    # 源站节点仅内部通信，通过 srs-proxy 代理对外暴露
+    expose:
+      - "1935"
+      - "1985"
+      - "8080"
+      - "8000/udp"
+    
+    environment:
+      - SRS_CANDIDATE=${PUBLIC_IP}
+      - SRS_API_PASSWORD=${SRS_API_PASSWORD}
+      # 节点类型标识（用于后端调度和节点注册）
+      - SRS_NODE_TYPE=live
+      - SRS_NODE_ID=origin-1
+      # DVR 录制开关（直播节点关闭）
+      - SRS_DVR_ENABLED=off
+      # 注册到直播 proxy
+      - SRS_PROXY_HOST=srs-proxy-live
+      # Redis 配置（连接外部 Redis 用于节点注册）
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    
+    volumes:
+      # 配置文件：共用 origin.conf
+      - ./conf/origin.conf:/usr/local/srs/conf/origin.conf:ro
+      # HLS 输出目录
+      - ./hls/origin1:/usr/local/srs/objs/nginx/html
+      # 录制文件存储（如需本地录制）
+      - ./recordings/origin1:/data/recordings
+    
+    command: ./objs/srs -c conf/origin.conf
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1985/api/v1/servers"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    networks:
+      - srs-network
+
+  # ============================================
+  # Origin 源站节点 2（录制节点）
+  # ============================================
+  origin-2:
+    image: registry.cn-hangzhou.aliyuncs.com/ossrs/srs:v7.0.78
+    container_name: srs-origin-2
+    hostname: origin-2
+    restart: always
+    
+    # 源站节点仅内部通信，通过 srs-proxy 代理对外暴露
+    expose:
+      - "1935"
+      - "1985"
+      - "8080"
+      - "8000/udp"
+    
+    environment:
+      - SRS_CANDIDATE=${PUBLIC_IP}
+      - SRS_API_PASSWORD=${SRS_API_PASSWORD}
+      # 节点类型标识
+      - SRS_NODE_TYPE=record
+      - SRS_NODE_ID=origin-2
+      # DVR 录制开关（录制节点开启）
+      - SRS_DVR_ENABLED=on
+      # 注册到录制 proxy
+      - SRS_PROXY_HOST=srs-proxy-record
+      # Redis 配置
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    
+    volumes:
+      # 配置文件：共用 origin.conf
+      - ./conf/origin.conf:/usr/local/srs/conf/origin.conf:ro
+      # HLS 输出目录
+      - ./hls/origin2:/usr/local/srs/objs/nginx/html
+      # 录制文件存储（大容量磁盘）
+      - ./recordings/origin2:/data/recordings
+    
+    command: ./objs/srs -c conf/origin.conf
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1985/api/v1/servers"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    networks:
+      - srs-network
+
+# ============================================
+# 网络配置（使用外部网络，与 docker-compose.yml 共享）
+# ============================================
+networks:
+  srs-network:
+    external: true

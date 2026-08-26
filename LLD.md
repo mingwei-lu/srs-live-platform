@@ -438,10 +438,18 @@ public void onReconnect(String uid, String newSessionId) {
 ### 6.1 配置规范
 
 ```conf
-# SRS 服务器配置
+# SRS 服务器配置 (支持 WebRTC + DVR 录制)
+# 文件位置: ./srs.conf
+
+listen              1935;
+max_connections     1000;
+srs_log_tank        file;
+srs_log_file        ./objs/srs.log;
+
+# HTTP API 配置
 http_api {
-    enabled     on;
-    listen      1985;
+    enabled         on;
+    listen          1985;
     auth {
         enabled     on;
         username    admin;
@@ -449,6 +457,13 @@ http_api {
     }
 }
 
+# HTTP Server 配置
+http_server {
+    enabled         on;
+    listen          8080;
+}
+
+# WebRTC 服务器配置
 rtc_server {
     enabled     on;
     protocol    udp;
@@ -456,19 +471,48 @@ rtc_server {
     candidate   ${SRS_CANDIDATE};
 }
 
+# WebRTC 推流配置
+vhost __defaultVhost__ {
+    # 启用 WebRTC
+    rtc {
+        enabled         on;
+    }
+    
+    # WebRTC 流转 RTMP（DVR 录制需要）
+    rtc_to_rtmp on;
+    
+    # RTMP 配置
+    rtmp {
+        enabled         on;
+    }
+    
+    # DVR 录制配置
+    dvr {
+        enabled         on;
+        dvr_path        /data/recordings/[app]/[stream]/[timestamp].mp4;
+        dvr_plan        session;        # 按会话录制
+        dvr_wait_keyframe on;           # 等待关键帧
+        dvr_time_jitter full;           # 时间戳抖动修正
+    }
+    
+    # HLS 配置
+    hls {
+        enabled     off;
+    }
+}
+
+# HTTP 回调配置
 http_hooks {
-    enabled     on;
-    on_publish  http://${BACKEND_HOST}/api/v1/srs/callback/on_publish;
-    on_unpublish http://${BACKEND_HOST}/api/v1/srs/callback/on_unpublish;
-    on_play     http://${BACKEND_HOST}/api/v1/srs/callback/on_play;
-    on_stop     http://${BACKEND_HOST}/api/v1/srs/callback/on_stop;
+    enabled         on;
+    on_publish      http://${BACKEND_HOST}/api/v1/srs/callback/on_publish;
+    on_unpublish    http://${BACKEND_HOST}/api/v1/srs/callback/on_unpublish;
+    on_play         http://${BACKEND_HOST}/api/v1/srs/callback/on_play;
+    on_stop         http://${BACKEND_HOST}/api/v1/srs/callback/on_stop;
+    on_dvr          http://${BACKEND_HOST}/api/v1/srs/callback/on_dvr;
 }
 
 peer_idle_timeout   30;
 stun_timeout        20;
-hls {
-    enabled     off;
-}
 ```
 
 ### 6.2 SRS API 调用封装

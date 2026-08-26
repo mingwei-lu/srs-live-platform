@@ -21,12 +21,27 @@ export interface MediaDeviceError {
   message: string
 }
 
+/** 画质配置 */
+export interface VideoQuality {
+  label: string
+  width: number
+  height: number
+}
+
+export const VIDEO_QUALITIES: VideoQuality[] = [
+  { label: '流畅', width: 640, height: 360 },
+  { label: '标清', width: 1280, height: 720 },
+  { label: '高清', width: 1920, height: 1080 }
+]
+
 /** 检测设备权限，返回可用的媒体流 */
 export async function getMediaStream(
-  options: { video?: boolean; audio?: boolean; screen?: boolean }
+  options: { video?: boolean; audio?: boolean; screen?: boolean; quality?: VideoQuality }
 ): Promise<{ stream: MediaStream; error?: MediaDeviceError }> {
   let stream: MediaStream
   let error: MediaDeviceError | undefined
+
+  const quality = options.quality || VIDEO_QUALITIES[1] // 默认标清
 
   try {
     if (options.screen) {
@@ -35,8 +50,15 @@ export async function getMediaStream(
         audio: options.audio
       })
     } else {
+      const videoConstraint = options.video
+        ? {
+            width: { ideal: quality.width, max: quality.width },
+            height: { ideal: quality.height, max: quality.height },
+            facingMode: 'user'
+          }
+        : false
       stream = await navigator.mediaDevices.getUserMedia({
-        video: options.video ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+        video: videoConstraint as any,
         audio: options.audio ? { echoCancellation: true, noiseSuppression: true } : false
       })
     }
@@ -408,16 +430,18 @@ export async function startWhipPublish(
     enableMicrophone?: boolean
     enableScreenShare?: boolean
     publisherName?: string
+    quality?: import('./rtc').VideoQuality
   } = {}
 ): Promise<WhipPublisher> {
-  const { enableCamera = true, enableMicrophone = true, enableScreenShare = false, publisherName = '主播' } = options
+  const { enableCamera = true, enableMicrophone = true, enableScreenShare = false, publisherName = '主播', quality } = options
 
   // 1. 获取摄像头流
   let cameraStream: MediaStream
   try {
     const result = await getMediaStream({
       video: enableCamera,
-      audio: enableMicrophone
+      audio: enableMicrophone,
+      quality
     })
     cameraStream = result.stream
   } catch (err: any) {

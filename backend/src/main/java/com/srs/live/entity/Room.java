@@ -14,6 +14,8 @@ public class Room {
     private String title;
     private String publisherUid;
     private String status;
+    /** 节点类型: live(直播节点) 或 record(录制节点) */
+    private String nodeType;
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;

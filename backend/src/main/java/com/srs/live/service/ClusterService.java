@@ -19,7 +19,6 @@ import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -30,11 +29,49 @@ public class ClusterService {
     private final RedisTemplate<String, Object> redisTemplate;
     private final JwtUtil jwtUtil;
 
-    @Value("${srs.srs.entrypoint:}")
-    private String srsEntrypoint;
+    @Value("${srs.srs.mode:unified}")
+    private String srsMode;
 
-    @Value("${srs.srs.rtc-port:8000}")
-    private int srsRtcPort;
+    @Value("${srs.srs.unified-proxy-host:}")
+    private String unifiedProxyHost;
+
+    @Value("${srs.srs.unified-proxy-port:8000}")
+    private int unifiedProxyPort;
+
+    @Value("${srs.srs.live-proxy-host:}")
+    private String liveProxyHost;
+
+    @Value("${srs.srs.live-proxy-port:8000}")
+    private int liveProxyPort;
+
+    @Value("${srs.srs.record-proxy-host:}")
+    private String recordProxyHost;
+
+    @Value("${srs.srs.record-proxy-port:8001}")
+    private int recordProxyPort;
+
+    /**
+     * 根据节点类型选择最优的 srs-proxy 实例
+     * 
+     * unified 模式: 所有流使用同一个 srs-proxy
+     * separate 模式: 根据 nodeType 选择不同的 srs-proxy
+     * 
+     * @param nodeType 节点类型: "live" 或 "record" (unified 模式下忽略)
+     * @return 对应的 proxy 地址，格式: "host:port"
+     */
+    private String selectProxyByType(String nodeType) {
+        // unified 模式：所有流使用同一个 srs-proxy
+        if ("unified".equalsIgnoreCase(srsMode)) {
+            return String.format("%s:%d", unifiedProxyHost, unifiedProxyPort);
+        }
+        
+        // separate 模式：根据 nodeType 选择不同的 srs-proxy
+        if ("record".equalsIgnoreCase(nodeType)) {
+            return String.format("%s:%d", recordProxyHost, recordProxyPort);
+        }
+        // 默认返回 live proxy
+        return String.format("%s:%d", liveProxyHost, liveProxyPort);
+    }
 
     public ClusterService(SrsNodeMapper srsNodeMapper,
                           ClusterEventMapper clusterEventMapper,
@@ -61,7 +98,24 @@ public class ClusterService {
         log.info("SRS node unregistered: {}", nodeId);
     }
 
+    /**
+     * 选择最优 SRS 节点（默认选择 live 节点，向后兼容）
+     */
     public String selectOptimalNode(String roomId) {
+        return selectOptimalNode(roomId, "live");
+    }
+
+    /**
+     * 根据节点类型选择最优 SRS 节点
+     * 
+     * unified 模式: 不区分节点类型，选择所有节点中连接数最少的
+     * separate 模式: 根据 nodeType 过滤节点
+     * 
+     * @param roomId 房间 ID
+     * @param nodeType 节点类型: "live" 或 "record" (unified 模式下忽略)
+     * @return 最优节点 ID
+     */
+    public String selectOptimalNode(String roomId, String nodeType) {
         Set<Object> nodes = redisTemplate.opsForZSet().range(RedisKeys.SRS_CLUSTER_NODES, 0, -1);
         if (nodes == null || nodes.isEmpty()) return null;
 
@@ -70,6 +124,23 @@ public class ClusterService {
 
         for (Object nodeObj : nodes) {
             String nodeId = nodeObj.toString();
+            
+            SrsNode node = getNode(nodeId);
+            if (node == null) {
+                continue;
+            }
+            
+            // separate 模式：根据节点类型过滤
+            // unified 模式：不区分节点类型，所有节点都参与调度
+            if ("separate".equalsIgnoreCase(srsMode)) {
+                if (node.getNodeType() == null) {
+                    continue;
+                }
+                if (!nodeType.equalsIgnoreCase(node.getNodeType())) {
+                    continue;
+                }
+            }
+            
             String connStr = (String) redisTemplate.opsForValue().get(RedisKeys.srsNodeConnections(nodeId));
             int connections = connStr != null ? Integer.parseInt(connStr) : 0;
             if (connections < minConnections) {
@@ -80,36 +151,42 @@ public class ClusterService {
         return bestNode;
     }
 
-    public String generateWhipUrl(String nodeId, String streamId, String uid) {
-        if (srsEntrypoint != null && !srsEntrypoint.isBlank()) {
-            String token = jwtUtil.generateToken(uid, "", "publisher");
-            return String.format("https://%s:%d/rtc/v1/whip/?token=%s&app=live&stream=%s",
-                    srsEntrypoint, srsRtcPort, token, streamId);
-        }
-        LambdaQueryWrapper<SrsNode> queryWrapper = new LambdaQueryWrapper<>();
-        SrsNode node = srsNodeMapper.selectOne(
-                queryWrapper.eq(SrsNode::getNodeId, nodeId));
-        if (node == null) return null;
-
+    /**
+     * 生成 WHIP 推流 URL
+     * 
+     * @param nodeId SRS 节点 ID（用于标识流所在的后端）
+     * @param streamId 流 ID
+     * @param uid 用户 ID
+     * @param nodeType 节点类型: "live" 或 "record"
+     * @return WHIP URL
+     */
+    public String generateWhipUrl(String nodeId, String streamId, String uid, String nodeType) {
         String token = jwtUtil.generateToken(uid, "", "publisher");
-        return String.format("https://%s:%d/rtc/v1/whip/?token=%s&app=live&stream=%s",
-                node.getIp(), node.getRtcPort(), token, streamId);
+        
+        // 根据节点类型选择对应的 srs-proxy
+        String proxyAddress = selectProxyByType(nodeType);
+        
+        return String.format("https://%s/rtc/v1/whip/?token=%s&app=live&stream=%s",
+                proxyAddress, token, streamId);
     }
 
-    public String generateWhepUrl(String nodeId, String streamId, String uid) {
-        if (srsEntrypoint != null && !srsEntrypoint.isBlank()) {
-            String token = jwtUtil.generateToken(uid, "", "audience");
-            return String.format("https://%s:%d/rtc/v1/whep/?token=%s&app=live&stream=%s",
-                    srsEntrypoint, srsRtcPort, token, streamId);
-        }
-        LambdaQueryWrapper<SrsNode> queryWrapper = new LambdaQueryWrapper<>();
-        SrsNode node = srsNodeMapper.selectOne(
-                queryWrapper.eq(SrsNode::getNodeId, nodeId));
-        if (node == null) return null;
-
+    /**
+     * 生成 WHEP 播放 URL
+     * 
+     * @param nodeId SRS 节点 ID（用于标识流所在的后端）
+     * @param streamId 流 ID
+     * @param uid 用户 ID
+     * @param nodeType 节点类型: "live" 或 "record"
+     * @return WHEP URL
+     */
+    public String generateWhepUrl(String nodeId, String streamId, String uid, String nodeType) {
         String token = jwtUtil.generateToken(uid, "", "audience");
-        return String.format("https://%s:%d/rtc/v1/whep/?token=%s&app=live&stream=%s",
-                node.getIp(), node.getRtcPort(), token, streamId);
+        
+        // 根据节点类型选择对应的 srs-proxy
+        String proxyAddress = selectProxyByType(nodeType);
+        
+        return String.format("https://%s/rtc/v1/whep/?token=%s&app=live&stream=%s",
+                proxyAddress, token, streamId);
     }
 
     public List<SrsNode> getAllNodes() {
