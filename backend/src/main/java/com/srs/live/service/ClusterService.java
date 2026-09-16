@@ -74,14 +74,30 @@ public class ClusterService {
     }
 
     public ClusterService(SrsNodeMapper srsNodeMapper,
-                          ClusterEventMapper clusterEventMapper,
-                          RedisTemplate<String, Object> redisTemplate,
-                          JwtUtil jwtUtil) {
-        this.srsNodeMapper = srsNodeMapper;
-        this.clusterEventMapper = clusterEventMapper;
-        this.redisTemplate = redisTemplate;
-        this.jwtUtil = jwtUtil;
+                      ClusterEventMapper clusterEventMapper,
+                      RedisTemplate<String, Object> redisTemplate,
+                      JwtUtil jwtUtil) {
+    this.srsNodeMapper = srsNodeMapper;
+    this.clusterEventMapper = clusterEventMapper;
+    this.redisTemplate = redisTemplate;
+    this.jwtUtil = jwtUtil;
+    // 启动时打印 Redis 中所有 SRS 相关 key，便于确认 srs-proxy 写入的 key 名称
+    try {
+        Set<String> allKeys = redisTemplate.keys("*");
+        if (allKeys != null) {
+            List<String> srsKeys = allKeys.stream()
+                .filter(k -> k.toLowerCase().contains("srs") || k.toLowerCase().contains("proxy"))
+                .sorted()
+                .collect(java.util.stream.Collectors.toList());
+            log.info("Redis SRS-related keys found: {}", srsKeys);
+            if (srsKeys.isEmpty()) {
+                log.warn("No SRS-related keys found in Redis! srs-proxy may not be connected or using different key prefix");
+            }
+        }
+    } catch (Exception e) {
+        log.warn("Failed to scan Redis keys: {}", e.getMessage());
     }
+}
 
     public void registerNode(SrsNode node) {
         srsNodeMapper.insert(node);
@@ -117,7 +133,10 @@ public class ClusterService {
      */
     public String selectOptimalNode(String roomId, String nodeType) {
         Set<Object> nodes = redisTemplate.opsForZSet().range(RedisKeys.SRS_CLUSTER_NODES, 0, -1);
-        if (nodes == null || nodes.isEmpty()) return null;
+        if (nodes == null || nodes.isEmpty()) {
+            // Redis 无节点时返回 nodeType 作为标识（代理层负责实际路由）
+            return nodeType;
+        }
 
         String bestNode = null;
         int minConnections = Integer.MAX_VALUE;
@@ -190,7 +209,7 @@ public class ClusterService {
     }
 
     public List<SrsNode> getAllNodes() {
-        // 从 Redis ZSet 获取节点ID（由 srs-proxy 自动注册）
+        // 从 Redis ZSet 获取节点ID（由 srs-proxy 写入）
         Set<Object> nodeIds = redisTemplate.opsForZSet().range(RedisKeys.SRS_CLUSTER_NODES, 0, -1);
         if (nodeIds == null || nodeIds.isEmpty()) {
             return List.of();

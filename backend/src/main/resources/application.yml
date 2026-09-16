@@ -6,9 +6,9 @@ spring:
     name: srs-live-platform
 
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:mysql-server}:3306/srs_live?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/srs_live?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:root@123456}
+    password: ${MYSQL_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
@@ -19,8 +19,8 @@ spring:
 
   data:
     redis:
-      host: ${REDIS_HOST:redis-server}
-      port: 16379
+      host: ${REDIS_HOST:8.137.165.18}
+      port: ${REDIS_PORT:16379}
       password: ${REDIS_PASSWORD:lmw121+_}
       timeout: 3000ms
       lettuce:
@@ -81,7 +81,7 @@ srs:
     # 统一模式配置 (unified mode)
     # ============================================
     # 单 srs-proxy 地址（所有流都经过此 proxy）
-    unified-proxy-host: ${SRS_UNIFIED_PROXY_HOST:srs-proxy}
+    unified-proxy-host: ${SRS_UNIFIED_PROXY_HOST:8.137.165.18}
     unified-proxy-port: ${SRS_UNIFIED_PROXY_PORT:8000}
     
     # ============================================
@@ -94,8 +94,8 @@ srs:
     record-proxy-host: ${SRS_RECORD_PROXY_HOST:srs-proxy-record}
     record-proxy-port: ${SRS_RECORD_PROXY_PORT:8001}
     
-    # 候选地址（WebRTC 用，留空自动获取）
-    candidate: ${SRS_CANDIDATE:}
+    # 候选地址（WebRTC 公网 IP）
+    candidate: ${SRS_CANDIDATE:8.137.165.18}
 
   # WebSocket 配置
   websocket:

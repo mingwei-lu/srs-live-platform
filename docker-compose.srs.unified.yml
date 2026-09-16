@@ -1,104 +1,68 @@
-version: "3.8"
+version: '3.8'
 
-# ============================================
-# SRS 源站集群 - 统一模式（低资源兼容）
-# 所有 Origin 节点都注册到同一个 srs-proxy
-# 所有节点都开启 DVR
-# 依赖：外部 Redis（由 docker-compose.yml 提供）
-# ============================================
+configs:
+  origin1_cfg:
+    file: ./conf/origin1.conf
+  origin2_cfg:
+    file: ./conf/origin2.conf
+  proxy_cfg:
+    file: ./conf/proxy.conf
 
 services:
-  # ============================================
-  # Origin 源站节点 1
-  # ============================================
-  origin-1:
-    image: registry.cn-hangzhou.aliyuncs.com/ossrs/srs:7
+  srs-origin-1:
+    image: ossrs/srs:v7.0.157
     container_name: srs-origin-1
-    hostname: origin-1
+    hostname: srs-origin-1
     restart: always
-    
-    expose:
-      - "1935"
-      - "1985"
-      - "8080"
-      - "8000/udp"
-    
-    environment:
-      - SRS_CANDIDATE=${PUBLIC_IP}
-      - SRS_API_PASSWORD=${SRS_API_PASSWORD}
-      # 统一模式：所有节点注册到同一个 srs-proxy
-      - SRS_PROXY_HOST=srs-proxy
-      # 统一模式：所有节点都开启 DVR
-      - SRS_DVR_ENABLED=on
-      # Redis 配置
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-    
+    entrypoint: [""]
+    ports:
+      - "11935:1935"
+      - "11986:1986"
+      - "18080:8080"
+      - "18000:8000/udp"
     volumes:
-      - ./conf/origin.conf:/usr/local/srs/conf/origin.conf:ro
-      - ./hls/origin1:/usr/local/srs/objs/nginx/html
-      - ./recordings/origin1:/data/recordings
-    
-    command: ./objs/srs -c conf/origin.conf
-    
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:1985/api/v1/servers"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    
-    networks:
-      - srs-network
+      - /home/lumingwei/srs/hls/origin1:/usr/local/srs/objs/nginx/html
+      - /home/lumingwei/srs/recordings/origin1:/data/recordings
+    configs:
+      - source: origin1_cfg
+        target: /tmp/srs.conf
+    command: ./objs/srs -c /tmp/srs.conf
 
-  # ============================================
-  # Origin 源站节点 2
-  # ============================================
-  origin-2:
-    image: registry.cn-hangzhou.aliyuncs.com/ossrs/srs:7
+  srs-origin-2:
+    image: ossrs/srs:v7.0.157
     container_name: srs-origin-2
-    hostname: origin-2
+    hostname: srs-origin-2
     restart: always
-    
-    expose:
-      - "1935"
-      - "1985"
-      - "8080"
-      - "8000/udp"
-    
-    environment:
-      - SRS_CANDIDATE=${PUBLIC_IP}
-      - SRS_API_PASSWORD=${SRS_API_PASSWORD}
-      # 统一模式：所有节点注册到同一个 srs-proxy
-      - SRS_PROXY_HOST=srs-proxy
-      # 统一模式：所有节点都开启 DVR
-      - SRS_DVR_ENABLED=on
-      # Redis 配置
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-    
+    entrypoint: [""]
+    ports:
+      - "12935:1935"
+      - "12986:1986"
+      - "19080:8080"
+      - "19000:8000/udp"
     volumes:
-      - ./conf/origin.conf:/usr/local/srs/conf/origin.conf:ro
-      - ./hls/origin2:/usr/local/srs/objs/nginx/html
-      - ./recordings/origin2:/data/recordings
-    
-    command: ./objs/srs -c conf/origin.conf
-    
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:1985/api/v1/servers"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    
-    networks:
-      - srs-network
+      - /home/lumingwei/srs/hls/origin2:/usr/local/srs/objs/nginx/html
+      - /home/lumingwei/srs/recordings/origin2:/data/recordings
+    configs:
+      - source: origin2_cfg
+        target: /tmp/srs.conf
+    command: ./objs/srs -c /tmp/srs.conf
 
-# ============================================
-# 网络配置（使用外部网络，与 docker-compose.yml 共享）
-# ============================================
-networks:
-  srs-network:
-    external: true
+  srs-proxy:
+    image: ossrs/srs:v7.0.157
+    container_name: srs-proxy-q
+    hostname: srs-proxy
+    restart: always
+    entrypoint: [""]
+    ports:
+      - "1935:1935"
+      - "1986:1986"
+      - "8080:8080"
+      - "8000:8000/udp"
+    depends_on:
+      - srs-origin-1
+      - srs-origin-2
+    configs:
+      - source: proxy_cfg
+        target: /tmp/srs.conf
+    command: ./objs/srs -c /tmp/srs.conf
+

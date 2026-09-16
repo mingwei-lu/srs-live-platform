@@ -65,6 +65,16 @@
         </div>
       </div>
 
+      <!-- 主播端：设备告警（不阻塞开播） -->
+      <div v-if="isPublisherMode && deviceWarning && !deviceError" class="device-warning card">
+        <div class="warn-icon">{{ 'ℹ️' }}</div>
+        <div class="warn-content">
+          <strong>{{ deviceWarning.title }}</strong>
+          <p>{{ deviceWarning.message }}</p>
+          <button class="btn btn-sm" @click="retryDevice">重新检测</button>
+        </div>
+      </div>
+
       <!-- 主播端：设备异常提示 -->
       <div v-if="isPublisherMode && deviceError" class="device-error card">
         <div class="error-icon">⚠️</div>
@@ -281,27 +291,32 @@ interface DeviceErrorInfo {
 }
 
 const deviceError = ref<DeviceErrorInfo | null>(null)
+const deviceWarning = ref<DeviceErrorInfo | null>(null)
+const cameraAvailable = ref(true)
 
 async function checkDevices(): Promise<boolean> {
   deviceError.value = null
+  deviceWarning.value = null
+  cameraAvailable.value = true
+
+  // 摄像头检测 - 失败不阻塞，仅记录告警（无摄像头可仅共享屏幕）
   try {
-    // 检测摄像头
     const videoStream = await navigator.mediaDevices.getUserMedia({ video: true })
     videoStream.getTracks().forEach(t => t.stop())
   } catch (err: any) {
-    deviceError.value = {
-      title: '摄像头检测失败',
+    cameraAvailable.value = false
+    deviceWarning.value = {
+      title: '摄像头不可用',
       message: err.name === 'NotAllowedError'
-        ? '请允许浏览器访问摄像头权限'
+        ? '摄像头权限被拒绝，您可仅使用屏幕共享开播'
         : err.name === 'NotFoundError'
-          ? '未检测到可用摄像头设备'
-          : `设备异常: ${err.message}`
+          ? '未检测到摄像头，您可仅使用屏幕共享开播'
+          : `摄像头异常: ${err.message}，您可仅使用屏幕共享`
     }
-    return false
   }
 
+  // 麦克风检测 - 失败阻塞（音频为直播必需品）
   try {
-    // 检测麦克风
     const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true })
     audioStream.getTracks().forEach(t => t.stop())
   } catch (err: any) {
@@ -372,7 +387,7 @@ async function handleStartLive() {
     // 开始 WHIP 推流
     if (publisherVideo.value && whipUrl) {
       publisher = await startWhipPublish(whipUrl, publisherVideo.value, {
-        enableCamera: true,
+        enableCamera: cameraAvailable.value,
         enableMicrophone: true,
         publisherName: authStore.username || '主播',
         quality: selectedQuality.value

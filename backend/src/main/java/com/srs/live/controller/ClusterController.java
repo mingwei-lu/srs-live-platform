@@ -26,6 +26,17 @@ public class ClusterController {
 
     // ========== 节点管理（只读，节点由 srs-proxy 自动注册到 Redis）==========
 
+    @PostMapping("/nodes")
+    public ApiResponse<SrsNode> addNode(@RequestBody SrsNode node) {
+        return ApiResponse.success(clusterService.addNode(node));
+    }
+
+    @DeleteMapping("/nodes/{nodeId}")
+    public ApiResponse<Void> removeNode(@PathVariable String nodeId) {
+        clusterService.removeNode(nodeId);
+        return ApiResponse.success(null);
+    }
+
     @GetMapping("/nodes")
     public ApiResponse<List<SrsNode>> listNodes() {
         return ApiResponse.success(clusterService.getAllNodes());
