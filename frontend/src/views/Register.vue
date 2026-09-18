@@ -49,7 +49,6 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { register, checkPhone } from '../api/user'
 import { useAuthStore } from '../store'
-import { connectWs } from '../utils/ws'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -76,7 +75,6 @@ async function handleRegister() {
     error.value = ''
     const res: any = await register(form)
     authStore.setLogin(res.data)
-    connectWs()
     router.push('/rooms')
   } catch (e: any) {
     if (e?.code === 40011) {

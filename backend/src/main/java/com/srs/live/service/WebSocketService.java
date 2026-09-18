@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.srs.live.common.constant.RedisKeys;
 import com.srs.live.common.constant.WsMsgType;
+import com.srs.live.dto.response.RoomUserListResponse;
 import com.srs.live.websocket.WebSocketSessionManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -97,13 +98,16 @@ public class WebSocketService {
         }
     }
 
-    public void broadcastRoomUserList(String roomId, List<Map<String, Object>> users) {
+    public void broadcastRoomUserList(String roomId, RoomUserListResponse resp) {
         Map<String, Object> data = new HashMap<>();
         data.put("type", WsMsgType.ROOM_USER_LIST);
         Map<String, Object> body = new HashMap<>();
         body.put("roomId", roomId);
-        body.put("users", users);
-        body.put("onlineCount", users.size());
+        body.put("hosts", resp.getHosts());
+        body.put("participants", resp.getParticipants());
+        body.put("hostCount", resp.getHostCount());
+        body.put("participantCount", resp.getParticipantCount());
+        body.put("totalCount", resp.getTotalCount());
         data.put("data", body);
         data.put("timestamp", System.currentTimeMillis());
 

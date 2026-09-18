@@ -5,8 +5,6 @@ configs:
     file: ./conf/origin1.conf
   origin2_cfg:
     file: ./conf/origin2.conf
-  proxy_cfg:
-    file: ./conf/proxy.conf
 
 services:
   srs-origin-1:
@@ -27,6 +25,8 @@ services:
       - source: origin1_cfg
         target: /tmp/srs.conf
     command: ./objs/srs -c /tmp/srs.conf
+    networks:
+      - srs-shared
 
   srs-origin-2:
     image: ossrs/srs:v7.0.157
@@ -46,23 +46,10 @@ services:
       - source: origin2_cfg
         target: /tmp/srs.conf
     command: ./objs/srs -c /tmp/srs.conf
+    networks:
+      - srs-shared
 
-  srs-proxy:
-    image: ossrs/srs:v7.0.157
-    container_name: srs-proxy-q
-    hostname: srs-proxy
-    restart: always
-    entrypoint: [""]
-    ports:
-      - "1935:1935"
-      - "1986:1986"
-      - "8080:8080"
-      - "8000:8000/udp"
-    depends_on:
-      - srs-origin-1
-      - srs-origin-2
-    configs:
-      - source: proxy_cfg
-        target: /tmp/srs.conf
-    command: ./objs/srs -c /tmp/srs.conf
+networks:
+  srs-shared:
+    external: true
 

@@ -24,8 +24,6 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { login } from '../api/user'
 import { useAuthStore } from '../store'
-import { connectWs } from '../utils/ws'
-
 const router = useRouter()
 const authStore = useAuthStore()
 const error = ref('')
@@ -36,7 +34,6 @@ async function handleLogin() {
     error.value = ''
     const res: any = await login(form)
     authStore.setLogin(res.data)
-    connectWs()
     router.push('/rooms')
   } catch (e: any) {
     error.value = e?.message || '登录失败'

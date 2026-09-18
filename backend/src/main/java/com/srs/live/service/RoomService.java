@@ -81,31 +81,53 @@ public class RoomService {
 
     public StartLiveResponse startLive(String roomId, String uid, boolean recordingEnabled) {
         Room room = getRoomEntity(roomId);
-        if (!RoomStatus.WAITING.getCode().equals(room.getStatus())) {
-            throw new BusinessException(40000, "room is not in waiting status");
+
+        // 仅允许 waiting（首次开播）或 live（重新推流）状态
+        if (!RoomStatus.WAITING.getCode().equals(room.getStatus())
+                && !RoomStatus.LIVE.getCode().equals(room.getStatus())) {
+            throw new BusinessException(40000, "room is not in waiting or live status");
         }
 
-        // 根据录制开关选择节点类型和最优 SRS 节点
-        String nodeType = recordingEnabled ? "record" : "live";
+        boolean isRePublish = RoomStatus.LIVE.getCode().equals(room.getStatus());
+
+        // 重新推流时校验主播权限（仅主播本人或管理员可重推）
+        if (isRePublish) {
+            checkOwnerOrAdmin(room, uid);
+        }
+
+        // 首次开播根据录制开关选节点类型；重新推流保持原有节点类型
+        String nodeType;
+        if (isRePublish) {
+            nodeType = room.getNodeType() != null ? room.getNodeType() : "live";
+        } else {
+            nodeType = recordingEnabled ? "record" : "live";
+        }
+
         String srsNode = clusterService.selectOptimalNode(roomId, nodeType);
         if (srsNode == null) {
             throw new BusinessException(50001, "no available SRS node");
         }
 
-        // 生成 WHIP 推流地址（根据节点类型路由到对应的 srs-proxy）
         String streamId = room.getRoomId();
         String whipUrl = clusterService.generateWhipUrl(srsNode, streamId, uid, nodeType);
 
-        // 更新房间状态，并将当前用户设为主播（谁开播谁就是主播）
-        room.setStatus(RoomStatus.LIVE.getCode());
-        room.setStartedAt(LocalDateTime.now());
-        room.setPublisherUid(uid);
-        room.setSrsNode(srsNode);
-        room.setNodeType(nodeType);
-        roomMapper.updateById(room);
+        if (isRePublish) {
+            // 重新推流：仅更新 SRS 节点信息，不改变房间状态和直播记录
+            room.setSrsNode(srsNode);
+            room.setNodeType(nodeType);
+            roomMapper.updateById(room);
+        } else {
+            // 首次开播：完整初始化房间状态
+            room.setStatus(RoomStatus.LIVE.getCode());
+            room.setStartedAt(LocalDateTime.now());
+            room.setPublisherUid(uid);
+            room.setSrsNode(srsNode);
+            room.setNodeType(nodeType);
+            roomMapper.updateById(room);
 
-        // 创建直播记录（含录播标记）
-        liveRecordService.createRecord(roomId, uid, recordingEnabled);
+            // 创建直播记录（含录播标记）
+            liveRecordService.createRecord(roomId, uid, recordingEnabled);
+        }
 
         return new StartLiveResponse(whipUrl, streamId, srsNode);
     }

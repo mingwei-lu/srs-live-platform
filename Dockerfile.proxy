@@ -1,19 +1,15 @@
-# SRS Proxy 自定义镜像
-# 基于官方 SRS 源码 srs/trunk/proxy/cmd 构建
+# SRS Proxy 镜像 - 与 origin 同版本 v7.0.157
 FROM dockerproxy.com/library/golang:1.21 AS builder
-RUN git clone --depth 1 https://github.com/ossrs/srs.git /srs
+RUN git clone --depth 1 --branch v7.0.157 https://github.com/ossrs/srs.git /srs
 WORKDIR /srs/trunk/proxy/cmd
 RUN go mod download && go build -o /out/srs-proxy
 
 FROM dockerproxy.com/library/debian:12-slim
+WORKDIR /
 COPY --from=builder /out/srs-proxy /usr/local/bin/srs-proxy
 
-# 创建 SRS 配置目录和静态资源目录
-RUN mkdir -p /usr/local/srs/conf /trunk/research
-
-# 内置默认 proxy 配置（运行时可通过 volume 覆盖）
-COPY conf/proxy.srs.conf /usr/local/srs/conf/proxy.conf
+RUN mkdir -p /trunk/research
 
 EXPOSE 1935 1985 8080 8000/udp 12025
 
-CMD ["srs-proxy", "-c", "/usr/local/srs/conf/proxy.conf"]
+CMD ["srs-proxy"]

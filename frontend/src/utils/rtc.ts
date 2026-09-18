@@ -1,5 +1,5 @@
 /**
- * WebRTC WHIP/WHEP 工具封装 + 本地录播
+ * WebRTC WHIP/WHEP 工具封装 + 本地录播 + 画中画合成
  * WHIP: WebRTC-HTTP Ingestion Protocol (推流)
  * WHEP: WebRTC-HTTP Egress Protocol (拉流)
  */
@@ -8,7 +8,9 @@ export interface WhipPublisher {
   pc: RTCPeerConnection
   stream: MediaStream
   stop: () => void
-  switchToScreenShare: () => Promise<void>
+  /** 切换到屏幕共享（设置屏幕流到合成器） */
+  switchToScreenShare: (screenStream: MediaStream) => Promise<void>
+  /** 切换回仅摄像头 */
   switchToCamera: () => Promise<void>
   setAudioEnabled: (enabled: boolean) => void
   startLocalRecord: () => void
@@ -34,146 +36,123 @@ export const VIDEO_QUALITIES: VideoQuality[] = [
   { label: '高清', width: 1920, height: 1080 }
 ]
 
-/** 检测设备权限，返回可用的媒体流 */
-export async function getMediaStream(
-  options: { video?: boolean; audio?: boolean; screen?: boolean; quality?: VideoQuality }
-): Promise<{ stream: MediaStream; error?: MediaDeviceError }> {
-  let stream: MediaStream
-  let error: MediaDeviceError | undefined
-
-  const quality = options.quality || VIDEO_QUALITIES[1] // 默认标清
-
+/** 尝试获取摄像头流（不抛异常，失败返回 null） */
+export async function tryGetCameraStream(quality?: VideoQuality): Promise<MediaStream | null> {
   try {
-    if (options.screen) {
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: 'always' } as any,
-        audio: options.audio
-      })
-    } else {
-      const videoConstraint = options.video
-        ? {
-            width: { ideal: quality.width, max: quality.width },
-            height: { ideal: quality.height, max: quality.height },
-            facingMode: 'user'
-          }
-        : false
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraint as any,
-        audio: options.audio ? { echoCancellation: true, noiseSuppression: true } : false
-      })
-    }
-  } catch (err: any) {
-    const errName = err?.name || ''
-    if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
-      error = {
-        type: options.screen ? 'camera' : 'camera',
-        message: '用户拒绝了媒体权限，请检查浏览器权限设置'
-      }
-    } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
-      error = {
-        type: options.screen ? 'camera' : 'camera',
-        message: '未检测到可用的摄像头/麦克风设备'
-      }
-    } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
-      error = {
-        type: options.screen ? 'camera' : 'camera',
-        message: '设备被其他应用占用，请关闭其他使用摄像头的应用后重试'
-      }
-    } else {
-      error = {
-        type: options.screen ? 'camera' : 'camera',
-        message: `设备异常: ${err?.message || '未知错误'}`
-      }
-    }
-    throw error
+    const q = quality || VIDEO_QUALITIES[1]
+    return await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: q.width, max: q.width },
+        height: { ideal: q.height, max: q.height },
+        facingMode: 'user'
+      },
+      audio: false
+    })
+  } catch {
+    return null
   }
-
-  return { stream, error }
 }
 
-export interface CompositeLayoutOptions {
-  publisherName?: string
+/** 尝试获取麦克风流（不抛异常，失败返回 null） */
+export async function tryGetMicStream(): Promise<MediaStream | null> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: false,
+      audio: { echoCancellation: true, noiseSuppression: true }
+    })
+  } catch {
+    return null
+  }
+}
+
+/** 获取屏幕共享流（需要用户手势触发） */
+export async function getScreenStream(): Promise<MediaStream> {
+  return navigator.mediaDevices.getDisplayMedia({
+    video: { cursor: 'always' } as any,
+    audio: false
+  })
 }
 
 /**
  * 创建画中画合成流（摄像头 + 屏幕共享）
- * 返回合成后的 MediaStream 和辅助函数
+ * 支持仅摄像头、仅屏幕、摄像头+屏幕(画中画)三种模式
  */
 export function createCompositeStream(
-  cameraStream: MediaStream,
-  layoutOptions: CompositeLayoutOptions = {}
+  options: {
+    cameraStream?: MediaStream | null
+    publisherName?: string
+    quality?: VideoQuality
+  } = {}
 ): {
   compositeStream: MediaStream
   setScreenShareStream: (screenStream: MediaStream | null) => void
   destroy: () => void
 } {
-  const { publisherName = '主播' } = layoutOptions
+  const { publisherName = '主播', quality } = options
+
+  const w = quality?.width || 1920
+  const h = quality?.height || 1080
 
   const canvas = document.createElement('canvas')
-  canvas.width = 1920
-  canvas.height = 1080
+  canvas.width = w
+  canvas.height = h
   const ctx = canvas.getContext('2d', { alpha: false })!
 
-  // 画布布局配置（参考主流直播平台）
+  // 画中画布局配置
   const LAYOUT = {
-    pipWidth: 320,
-    pipHeight: 240,
-    pipMarginX: 24,
-    pipMarginY: 88, // 底部留空间给信息条
+    pipWidth: Math.round(w * 0.167),   // 约320@1920
+    pipHeight: Math.round(h * 0.222),  // 约240@1080
+    pipMarginX: Math.round(w * 0.0125),
+    pipMarginY: Math.round(h * 0.081),
     pipRadius: 16,
     pipBorderWidth: 3,
-    pipBorderColor: '#ffffff',
-    pipShadowColor: 'rgba(0,0,0,0.5)',
-    pipShadowBlur: 16,
-    pipShadowOffsetX: 0,
-    pipShadowOffsetY: 4
+    pipBorderColor: '#ffffff'
   }
 
-  const cameraVideo = document.createElement('video')
-  cameraVideo.autoplay = true
-  cameraVideo.muted = true
+  // 摄像头视频元素
+  let cameraVideo: HTMLVideoElement | null = null
+  if (options.cameraStream) {
+    cameraVideo = document.createElement('video')
+    cameraVideo.autoplay = true
+    cameraVideo.muted = true
+    cameraVideo.srcObject = options.cameraStream
+    cameraVideo.play()
+  }
 
+  // 屏幕共享视频元素
   let screenVideo: HTMLVideoElement | null = null
   let animFrameId: number
 
-  // 设置摄像头视频源
-  cameraVideo.srcObject = cameraStream
-  cameraVideo.play()
-
-  // 辅助函数：填充圆角矩形
   function fillRoundRect(
     context: CanvasRenderingContext2D,
     x: number, y: number,
-    w: number, h: number,
-    r: number,
-    fillStyle: string
+    cw: number, ch: number, r: number, fillStyle: string
   ) {
     context.save()
     context.fillStyle = fillStyle
-    drawRoundRect(context, x, y, w, h, r)
+    drawRoundRect(context, x, y, cw, ch, r)
     context.fill()
     context.restore()
   }
+
   function drawRoundRect(
     context: CanvasRenderingContext2D,
     x: number, y: number,
-    w: number, h: number,
-    r: number
+    cw: number, ch: number, r: number
   ) {
     context.beginPath()
     context.moveTo(x + r, y)
-    context.lineTo(x + w - r, y)
-    context.arcTo(x + w, y, x + w, y + r, r)
-    context.lineTo(x + w, y + h - r)
-    context.arcTo(x + w, y + h, x + w - r, y + h, r)
-    context.lineTo(x + r, y + h)
-    context.arcTo(x, y + h, x, y + h - r, r)
+    context.lineTo(x + cw - r, y)
+    context.arcTo(x + cw, y, x + cw, y + r, r)
+    context.lineTo(x + cw, y + ch - r)
+    context.arcTo(x + cw, y + ch, x + cw - r, y + ch, r)
+    context.lineTo(x + r, y + ch)
+    context.arcTo(x, y + ch, x, y + ch - r, r)
     context.lineTo(x, y + r)
     context.arcTo(x, y, x + r, y, r)
     context.closePath()
   }
 
-  // 辅助函数：等比填充绘制
   function drawCover(
     context: CanvasRenderingContext2D,
     video: HTMLVideoElement,
@@ -183,54 +162,44 @@ export function createCompositeStream(
     const vh = video.videoHeight || ch
     const vratio = vw / vh
     const cratio = cw / ch
-
     let sx = 0, sy = 0, sw = vw, sh = vh
     if (vratio > cratio) {
-      // 视频更宽，截取左右
       sw = vh * cratio
       sx = (vw - sw) / 2
     } else if (vratio < cratio) {
-      // 视频更高，截取上下
       sh = vw / cratio
       sy = (vh - sh) / 2
     }
-
     context.drawImage(video, sx, sy, sw, sh, cx, cy, cw, ch)
   }
 
   function draw() {
     const hasScreen = screenVideo && screenVideo.readyState >= 2
-    const hasCamera = cameraVideo.readyState >= 2
+    const hasCamera = cameraVideo && cameraVideo.readyState >= 2
 
-    // 1. 背景
+    // 背景
     ctx.fillStyle = '#0a0a1a'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-    // 2. 主画面（屏幕共享或摄像头全屏）
+    // 主画面：屏幕共享优先，否则摄像头
     if (hasScreen) {
       drawCover(ctx, screenVideo!, 0, 0, canvas.width, canvas.height)
     } else if (hasCamera) {
-      drawCover(ctx, cameraVideo, 0, 0, canvas.width, canvas.height)
+      drawCover(ctx, cameraVideo!, 0, 0, canvas.width, canvas.height)
     }
 
-    // 3. 底部信息条（当有屏幕共享时显示）
+    // 底部信息条（屏幕共享时显示）
     if (hasScreen) {
-      // 底部渐变遮罩
-      const gradient = ctx.createLinearGradient(0, canvas.height - 90, 0, canvas.height)
-      gradient.addColorStop(0, 'rgba(0,0,0,0)')
-      gradient.addColorStop(1, 'rgba(0,0,0,0.75)')
-      ctx.fillStyle = gradient
-      ctx.fillRect(0, canvas.height - 90, canvas.width, 90)
-
-      // 分隔线
+      const gradH = Math.round(h * 0.083)
+      const sepY = canvas.height - Math.round(h * 0.059)
+      ctx.fillStyle = createGradient(ctx, canvas.height, gradH)
+      ctx.fillRect(0, canvas.height - gradH, canvas.width, gradH)
       ctx.strokeStyle = 'rgba(255,255,255,0.1)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.moveTo(0, canvas.height - 64)
-      ctx.lineTo(canvas.width, canvas.height - 64)
+      ctx.moveTo(0, sepY)
+      ctx.lineTo(canvas.width, sepY)
       ctx.stroke()
-
-      // 主播名称
       ctx.fillStyle = '#ffffff'
       ctx.font = 'bold 20px "Microsoft YaHei", "PingFang SC", sans-serif'
       ctx.textBaseline = 'middle'
@@ -238,7 +207,6 @@ export function createCompositeStream(
       ctx.shadowBlur = 4
       ctx.fillText(publisherName, 24, canvas.height - 32)
       ctx.shadowBlur = 0
-
       // LIVE 标签
       const liveX = canvas.width - 110
       const liveY = canvas.height - 44
@@ -247,27 +215,25 @@ export function createCompositeStream(
       ctx.font = 'bold 12px "Microsoft YaHei", sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText('● LIVE', liveX + 43, liveY + 14)
+      ctx.fillText('• LIVE', liveX + 43, liveY + 14)
       ctx.textAlign = 'left'
     }
 
-    // 4. 画中画：摄像头小窗口（右下角，圆角边框）
+    // 画中画：摄像头小窗（右下角）
     if (hasScreen && hasCamera) {
       const pipX = canvas.width - LAYOUT.pipWidth - LAYOUT.pipMarginX
       const pipY = canvas.height - LAYOUT.pipHeight - LAYOUT.pipMarginY
-
       // 阴影
       ctx.save()
-      ctx.shadowColor = LAYOUT.pipShadowColor
-      ctx.shadowBlur = LAYOUT.pipShadowBlur
-      ctx.shadowOffsetX = LAYOUT.pipShadowOffsetX
-      ctx.shadowOffsetY = LAYOUT.pipShadowOffsetY
+      ctx.shadowColor = 'rgba(0,0,0,0.5)'
+      ctx.shadowBlur = 16
+      ctx.shadowOffsetX = 0
+      ctx.shadowOffsetY = 4
       drawRoundRect(ctx, pipX, pipY, LAYOUT.pipWidth, LAYOUT.pipHeight, LAYOUT.pipRadius)
       ctx.clip()
       ctx.shadowColor = 'transparent'
-      drawCover(ctx, cameraVideo, pipX, pipY, LAYOUT.pipWidth, LAYOUT.pipHeight)
+      drawCover(ctx, cameraVideo!, pipX, pipY, LAYOUT.pipWidth, LAYOUT.pipHeight)
       ctx.restore()
-
       // 边框
       ctx.save()
       ctx.strokeStyle = LAYOUT.pipBorderColor
@@ -275,8 +241,7 @@ export function createCompositeStream(
       drawRoundRect(ctx, pipX, pipY, LAYOUT.pipWidth, LAYOUT.pipHeight, LAYOUT.pipRadius)
       ctx.stroke()
       ctx.restore()
-
-      // "摄像头" 标签
+      // 标签
       fillRoundRect(ctx, pipX + 10, pipY + 10, 60, 22, 3, 'rgba(0,0,0,0.55)')
       ctx.fillStyle = '#ffffff'
       ctx.font = '11px "Microsoft YaHei", sans-serif'
@@ -284,8 +249,7 @@ export function createCompositeStream(
       ctx.textAlign = 'center'
       ctx.fillText('摄像头', pipX + 40, pipY + 21)
       ctx.textAlign = 'left'
-
-      // 右上角在线绿点
+      // 在线绿点
       ctx.beginPath()
       ctx.arc(pipX + LAYOUT.pipWidth - 16, pipY + 16, 6, 0, Math.PI * 2)
       ctx.fillStyle = '#4ade80'
@@ -298,17 +262,17 @@ export function createCompositeStream(
     animFrameId = requestAnimationFrame(draw)
   }
 
-  draw()
+  function createGradient(context: CanvasRenderingContext2D, ch: number, gradH: number) {
+    const gradient = context.createLinearGradient(0, ch - gradH, 0, ch)
+    gradient.addColorStop(0, 'rgba(0,0,0,0)')
+    gradient.addColorStop(1, 'rgba(0,0,0,0.75)')
+    return gradient
+  }
 
-  // 获取麦克风和屏幕共享的音频轨道
-  const audioTracks: MediaStreamTrack[] = []
-  cameraStream.getAudioTracks().forEach(t => audioTracks.push(t))
+  draw()
 
   // 从 Canvas 获取视频流
   const compositeStream = canvas.captureStream(30)
-
-  // 添加音频轨道
-  audioTracks.forEach(track => compositeStream.addTrack(track))
 
   return {
     compositeStream,
@@ -332,7 +296,9 @@ export function createCompositeStream(
     },
     destroy: () => {
       cancelAnimationFrame(animFrameId)
-      cameraVideo.srcObject = null
+      if (cameraVideo) {
+        cameraVideo.srcObject = null
+      }
       if (screenVideo) {
         screenVideo.srcObject = null
       }
@@ -342,16 +308,6 @@ export function createCompositeStream(
 
 /**
  * 本地录播管理器
- * 
- * 注意：浏览器 MediaRecorder API 原生主要支持 WebM 格式（VP8/VP9）。
- * MP4 (H.264) 支持非常有限：
- * - Chrome 在部分平台上可能支持 video/mp4，但兼容性差
- * - Firefox / Safari 基本不支持
- * - 即使支持，录制的 MP4 也可能缺少 moov atom 导致无法播放
- * 
- * 如果需要可靠的 MP4 输出，建议：
- * 1. 前端录制 WebM -> 上传到后端 -> ffmpeg 转码为 MP4
- * 2. 使用 ffmpeg.wasm 在浏览器端转码（体积大，约 25MB）
  */
 export class LocalRecorder {
   private recorder: MediaRecorder | null = null
@@ -362,25 +318,18 @@ export class LocalRecorder {
   start(stream: MediaStream) {
     if (this.recording) return
     this.chunks = []
-
-    // 尝试 MP4 -> WebM VP9 -> WebM VP8 -> 默认 WebM
     if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')) {
       this.mimeType = 'video/mp4;codecs=avc1'
     } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
       this.mimeType = 'video/webm;codecs=vp9'
     } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
       this.mimeType = 'video/webm;codecs=vp8'
-    } else {
-      this.mimeType = 'video/webm'
     }
-
     this.recorder = new MediaRecorder(stream, { mimeType: this.mimeType })
     this.recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        this.chunks.push(e.data)
-      }
+      if (e.data.size > 0) this.chunks.push(e.data)
     }
-    this.recorder.start(1000) // 每秒一个 chunk
+    this.recorder.start(1000)
     this.recording = true
   }
 
@@ -401,12 +350,10 @@ export class LocalRecorder {
     return this.mimeType
   }
 
-  /** 下载录制的视频 */
   download(blob: Blob, filename: string) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    // 根据实际 mime type 确定扩展名
     const ext = this.mimeType.includes('mp4') ? '.mp4' : '.webm'
     a.download = filename.endsWith(ext) ? filename : filename + ext
     document.body.appendChild(a)
@@ -417,53 +364,35 @@ export class LocalRecorder {
 }
 
 /**
- * WHIP 推流：获取媒体并推流到 SRS
+ * WHIP 推流
  * @param whipUrl 推流地址
- * @param videoElement 用于预览的视频元素
- * @param options 配置项
+ * @param videoElement 预览用的 video 元素
+ * @param composite 合成流管理器（由 createCompositeStream 返回）
+ * @param audioTrack 麦克风音频轨道（可选，无音频可不传）
  */
 export async function startWhipPublish(
   whipUrl: string,
   videoElement: HTMLVideoElement,
-  options: {
-    enableCamera?: boolean
-    enableMicrophone?: boolean
-    enableScreenShare?: boolean
-    publisherName?: string
-    quality?: import('./rtc').VideoQuality
-  } = {}
+  composite: ReturnType<typeof createCompositeStream>,
+  audioTrack?: MediaStreamTrack | null
 ): Promise<WhipPublisher> {
-  const { enableCamera = true, enableMicrophone = true, enableScreenShare = false, publisherName = '主播', quality } = options
+  const compositeStream = composite.compositeStream
 
-  // 1. 获取摄像头流
-  let cameraStream: MediaStream
-  try {
-    const result = await getMediaStream({
-      video: enableCamera,
-      audio: enableMicrophone,
-      quality
-    })
-    cameraStream = result.stream
-  } catch (err: any) {
-    throw err
+  // 添加音频轨道到合成流
+  if (audioTrack) {
+    compositeStream.addTrack(audioTrack)
   }
 
-  // 2. 创建合成流
-  const composite = createCompositeStream(cameraStream, { publisherName })
-
-  // 3. 显示预览
-  videoElement.srcObject = composite.compositeStream
+  // 预览
+  videoElement.srcObject = compositeStream
   await videoElement.play()
 
-  // 4. 创建 RTCPeerConnection
+  // 创建 PeerConnection 并推流
   const pc = new RTCPeerConnection()
-
-  // 添加合成流的轨道
-  composite.compositeStream.getTracks().forEach(track => {
-    pc.addTrack(track, composite.compositeStream)
+  compositeStream.getTracks().forEach(track => {
+    pc.addTrack(track, compositeStream)
   })
 
-  // 5. 创建 offer 并发送
   const offer = await pc.createOffer()
   await pc.setLocalDescription(offer)
   await waitForIceGathering(pc)
@@ -473,31 +402,25 @@ export async function startWhipPublish(
     headers: { 'Content-Type': 'application/sdp' },
     body: pc.localDescription?.sdp
   })
-
   if (!response.ok) {
     throw new Error(`WHIP publish failed: ${response.status}`)
   }
-
   const answerSdp = await response.text()
   await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }))
 
-  // 6. 本地录播实例
   const localRecorder = new LocalRecorder()
-
   let isScreenSharing = false
 
   return {
     pc,
-    stream: composite.compositeStream,
+    stream: compositeStream,
     stop: () => {
-      composite.compositeStream.getTracks().forEach(t => t.stop())
-      cameraStream.getTracks().forEach(t => t.stop())
+      compositeStream.getTracks().forEach(t => t.stop())
       composite.destroy()
       pc.close()
     },
-    switchToScreenShare: async () => {
-      const screenResult = await getMediaStream({ screen: true, audio: enableMicrophone })
-      composite.setScreenShareStream(screenResult.stream)
+    switchToScreenShare: async (screenStream: MediaStream) => {
+      composite.setScreenShareStream(screenStream)
       isScreenSharing = true
     },
     switchToCamera: async () => {
@@ -505,12 +428,12 @@ export async function startWhipPublish(
       isScreenSharing = false
     },
     setAudioEnabled: (enabled: boolean) => {
-      composite.compositeStream.getAudioTracks().forEach(track => {
+      compositeStream.getAudioTracks().forEach(track => {
         track.enabled = enabled
       })
     },
     startLocalRecord: () => {
-      localRecorder.start(composite.compositeStream)
+      localRecorder.start(compositeStream)
     },
     stopLocalRecord: () => {
       return localRecorder.stop()
@@ -521,8 +444,6 @@ export async function startWhipPublish(
 
 /**
  * WHEP 拉流：从 SRS 拉流并播放
- * @param whepUrl 拉流地址
- * @param videoElement 用于播放的视频元素
  */
 export async function startWhepPlay(whepUrl: string, videoElement: HTMLVideoElement): Promise<() => void> {
   const pc = new RTCPeerConnection()
@@ -533,31 +454,25 @@ export async function startWhepPlay(whepUrl: string, videoElement: HTMLVideoElem
     }
   }
 
-  // 1. 获取 offer
   const offerResponse = await fetch(whepUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/sdp' }
   })
-
   if (!offerResponse.ok) {
     throw new Error(`WHEP play failed: ${offerResponse.status}`)
   }
-
   const offerSdp = await offerResponse.text()
   await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSdp }))
 
-  // 2. 创建 answer
   const answer = await pc.createAnswer()
   await pc.setLocalDescription(answer)
   await waitForIceGathering(pc)
 
-  // 3. 发送 answer
   const patchResponse = await fetch(whepUrl, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/sdp' },
     body: pc.localDescription?.sdp
   })
-
   if (!patchResponse.ok) {
     throw new Error(`WHEP patch failed: ${patchResponse.status}`)
   }
@@ -567,9 +482,6 @@ export async function startWhepPlay(whepUrl: string, videoElement: HTMLVideoElem
   }
 }
 
-/**
- * 等待 ICE gathering 完成
- */
 function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
   return new Promise((resolve) => {
     if (pc.iceGatheringState === 'complete') {

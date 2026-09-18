@@ -1,63 +1,47 @@
 version: '3.8'
 
 # ============================================
-# SRS-Proxy 代理层 - 统一模式（低资源兼容）
-# 
-# 适用场景：
-# - 用户量少，资源有限（1-2台服务器）
-# - 直播和录制共用同一套 SRS 节点
-# - 所有 Origin 节点都开启 DVR（直播也录制）
-#
-# 架构说明：
-# - srs-proxy: 单实例，所有流统一入口
-# - origin-1 / origin-2: 都注册到同一个 srs-proxy
-# - 所有节点 DVR 开启
-# 
-# 依赖：外部 Redis（由 docker-compose.yml 提供）
+# SRS-Proxy 代理层 - 统一模式
+# 配合 docker-compose.srs.unified.yml 使用
 # ============================================
 
 services:
-  # ============================================
-  # SRS-Proxy（统一入口）
-  # 功能：统一入口、负载均衡、流路由
-  # ============================================
   srs-proxy:
     image:  local/srs-proxy:v7
     container_name: srs-proxy
     hostname: srs-proxy
     restart: always
- 
-    
+
     ports:
-      - "1935:1935/tcp"      # RTMP 代理入口
-      - "1985:1985/tcp"      # HTTP API 代理入口
-      - "8000:8000/udp"      # WebRTC UDP 代理入口
-      - "12025:12025/tcp"    # 系统 API / 管理接口
-    
+      - '1935:1935/tcp'      # RTMP
+      - '1985:1985/tcp'      # HTTP API
+      - '8081:8080/tcp'      # HTTP Server
+      - '8000:8000'           # WebRTC (TCP信令 + UDP媒体)
+      - '12025:12025/tcp'    # 集群管理
+
     volumes:
-      - ./proxy.nostatic.conf:/app/proxy.nostatic.conf
-    entrypoint: ["/bin/sh","-c","mkdir -p /trunk/research && exec srs-proxy -c /etc/srs/proxy.conf"]    
+      - ./conf/proxy.srs.conf:/tmp/proxy.conf:ro
+
+    entrypoint:
+      ['/bin/sh', '-c', 'mkdir -p /trunk/research && exec srs-proxy -c /tmp/proxy.conf']
+
     environment:
-      # SRS Proxy 服务端口配置
       - PROXY_RTMP_SERVER=1935
       - PROXY_HTTP_SERVER=8080
       - PROXY_HTTP_API=1985
       - PROXY_WEBRTC_SERVER=8000
       - PROXY_SRT_SERVER=10080
       - PROXY_SYSTEM_API=12025
-      # 关闭静态demo页面，解决 trunk/research 文件不存在报错
-      - PROXY_HTTP_STATIC_ENABLE=false      
-      # 负载均衡模式
-      # memory: 单机内存模式（无需 Redis，适合单节点测试）
-      # redis: 使用 Redis 共享节点状态（多节点部署推荐）
-      - PROXY_LOAD_BALANCER_TYPE=redis
-      
-      # Redis 配置（用于节点状态同步和负载均衡）
+      - PROXY_HTTP_STATIC_ENABLE=false
+      - PROXY_LOAD_BALANCER_TYPE=memory
       - PROXY_REDIS_HOST=172.16.6.116
       - PROXY_REDIS_PORT=16379
       - PROXY_REDIS_PASSWORD=lmw121+_
-      
-      # WebRTC 候选地址（公网 IP）
       - PROXY_CANDIDATE=8.137.165.18
-    
-   
+
+    networks:
+      - srs-shared
+
+networks:
+  srs-shared:
+    external: true

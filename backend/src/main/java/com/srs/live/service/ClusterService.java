@@ -185,7 +185,7 @@ public class ClusterService {
         // 根据节点类型选择对应的 srs-proxy
         String proxyAddress = selectProxyByType(nodeType);
         
-        return String.format("https://%s/rtc/v1/whip/?token=%s&app=live&stream=%s",
+        return String.format("http://%s/rtc/v1/whip/?token=%s&app=live&stream=%s",
                 proxyAddress, token, streamId);
     }
 
@@ -204,7 +204,7 @@ public class ClusterService {
         // 根据节点类型选择对应的 srs-proxy
         String proxyAddress = selectProxyByType(nodeType);
         
-        return String.format("https://%s/rtc/v1/whep/?token=%s&app=live&stream=%s",
+        return String.format("http://%s/rtc/v1/whep/?token=%s&app=live&stream=%s",
                 proxyAddress, token, streamId);
     }
 
@@ -332,12 +332,15 @@ public class ClusterService {
     /** 检查 SRS 节点健康状态 */
     public Map<String, Object> checkNodeHealth(String nodeId) {
         SrsNode node = getNode(nodeId);
-        if (node == null) {
-            throw new BusinessException(40004, "node not found");
-        }
-
         Map<String, Object> result = new HashMap<>();
         result.put("nodeId", nodeId);
+
+        if (node == null) {
+            // 节点未在 DB 注册（如 fallback 场景），返回离线状态而非抛异常
+            result.put("status", "unknown");
+            result.put("reason", "node not registered in database");
+            return result;
+        }
         result.put("ip", node.getIp());
         result.put("apiPort", node.getApiPort());
 

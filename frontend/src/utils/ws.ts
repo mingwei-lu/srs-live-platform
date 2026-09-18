@@ -135,6 +135,8 @@ class WebSocketClient {
   }
 }
 
+export { WebSocketClient }
+
 let wsClient: WebSocketClient | null = null
 
 export function getWsClient(): WebSocketClient {
@@ -144,16 +146,49 @@ export function getWsClient(): WebSocketClient {
   return wsClient
 }
 
-export function connectWs() {
-  const auth = useAuthStore()
-  if (auth.token) {
-    getWsClient().connect(auth.token)
-  }
-}
-
 export function disconnectWs() {
   if (wsClient) {
     wsClient.destroy()
     wsClient = null
   }
+}
+
+/**
+ * 创建房间级 WebSocket 连接：进入直播间时调用，离开时 destroy
+ * @param token 认证 token
+ * @param roomId 直播间 ID
+ * @param onUserList 在线用户列表回调
+ * @param onStatusChange 房间状态变更回调
+ * @returns WebSocketClient 实例，调用方需在 onUnmounted 中 destroy
+ */
+export function connectWsForRoom(
+  token: string,
+  roomId: string,
+  onUserList: (msg: any) => void,
+  onStatusChange: (msg: any) => void
+): WebSocketClient {
+  const client = new WebSocketClient()
+  client.connect(token)
+
+  // 注册房间消息处理器
+  const userListHandler = (msg: any) => {
+    if (msg.data?.roomId === roomId) {
+      onUserList(msg)
+    }
+  }
+  const statusChangeHandler = (msg: any) => {
+    if (msg.data?.roomId === roomId) {
+      onStatusChange(msg)
+    }
+  }
+
+  client.on('room_user_list', userListHandler)
+  client.on('room_status_change', statusChangeHandler)
+
+  // 连接建立后延迟加入房间
+  setTimeout(() => {
+    client.joinRoom(roomId)
+  }, 500)
+
+  return client
 }

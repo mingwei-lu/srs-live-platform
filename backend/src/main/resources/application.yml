@@ -82,7 +82,7 @@ srs:
     # ============================================
     # 单 srs-proxy 地址（所有流都经过此 proxy）
     unified-proxy-host: ${SRS_UNIFIED_PROXY_HOST:8.137.165.18}
-    unified-proxy-port: ${SRS_UNIFIED_PROXY_PORT:8000}
+    unified-proxy-port: ${SRS_UNIFIED_PROXY_PORT:1985}
     
     # ============================================
     # 分离模式配置 (separate mode)

@@ -159,8 +159,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         // 记录在线状态
         onlineUserService.userOnline(uid, username, role, roomId, session.getId(), nodeId);
 
-        // 广播在线列表更新
-        var users = onlineUserService.getRoomOnlineUsers(roomId);
+        // 广播在线列表更新（按主播/参与人员分类）
+        var users = onlineUserService.getRoomOnlineUsersCategorized(roomId);
         webSocketService.broadcastRoomUserList(roomId, users);
 
         // 记录参与者进入（若直播正在进行）
@@ -187,8 +187,8 @@ public class LiveWebSocketHandler extends TextWebSocketHandler {
         sessionManager.leaveRoom(uid, roomId);
         onlineUserService.userOffline(uid);
 
-        // 广播在线列表更新
-        var users = onlineUserService.getRoomOnlineUsers(roomId);
+        // 广播在线列表更新（按主播/参与人员分类）
+        var users = onlineUserService.getRoomOnlineUsersCategorized(roomId);
         webSocketService.broadcastRoomUserList(roomId, users);
 
         log.info("user left room: uid={}, roomId={}", uid, roomId);

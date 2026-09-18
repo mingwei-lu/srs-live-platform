@@ -9,12 +9,14 @@ public class RedisKeys {
     public static final String USER_HEARTBEAT = "user:%s:heartbeat";
     public static final String USER_OFFLINE_MSGS = "user:%s:offline_msgs";
     public static final String WS_NODE_USERS = "ws:node:%s:users";
+    public static final String ROOM_PUBLISHER = "room:%s:publisher";
     public static final String SRS_CLUSTER_NODES = "srs:cluster:nodes";
     public static final String SRS_NODE_CONNECTIONS = "srs:node:%s:connections";
     public static final String API_RATE = "api:rate:%s";
     public static final String API_TOKEN = "api:token:%s";
 
     public static String roomUsers(String roomId) { return String.format(ROOM_USERS, roomId); }
+    public static String roomPublisher(String roomId) { return String.format(ROOM_PUBLISHER, roomId); }
     public static String userNode(String uid) { return String.format(USER_NODE, uid); }
     public static String userHeartbeat(String uid) { return String.format(USER_HEARTBEAT, uid); }
     public static String userOfflineMsgs(String uid) { return String.format(USER_OFFLINE_MSGS, uid); }

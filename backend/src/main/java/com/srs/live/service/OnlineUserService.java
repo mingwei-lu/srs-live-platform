@@ -3,7 +3,10 @@ package com.srs.live.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.srs.live.common.constant.RedisKeys;
 import com.srs.live.entity.OnlineUser;
+import com.srs.live.entity.Room;
+import com.srs.live.dto.response.RoomUserListResponse;
 import com.srs.live.mapper.OnlineUserMapper;
+import com.srs.live.mapper.RoomMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -11,17 +14,21 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class OnlineUserService {
 
     private final OnlineUserMapper onlineUserMapper;
+    private final RoomMapper roomMapper;
     private final RedisTemplate<String, Object> redisTemplate;
 
     public OnlineUserService(OnlineUserMapper onlineUserMapper,
+                             RoomMapper roomMapper,
                              RedisTemplate<String, Object> redisTemplate) {
         this.onlineUserMapper = onlineUserMapper;
+        this.roomMapper = roomMapper;
         this.redisTemplate = redisTemplate;
     }
 
@@ -86,22 +93,88 @@ public class OnlineUserService {
     public List<Map<String, Object>> getRoomOnlineUsers(String roomId) {
         Set<Object> uids = redisTemplate.opsForSet().members(RedisKeys.roomUsers(roomId));
         if (uids == null || uids.isEmpty()) return Collections.emptyList();
-        LambdaQueryWrapper<OnlineUser> query = new LambdaQueryWrapper<>();
         List<Map<String, Object>> result = new ArrayList<>();
-        for (Object uidObj : uids) {
-            String uid = uidObj.toString();
-            OnlineUser ou = onlineUserMapper.selectOne(
-                    query.eq(OnlineUser::getUid, uid));
-            if (ou != null) {
-                Map<String, Object> user = new HashMap<>();
-                user.put("uid", ou.getUid());
-                user.put("username", ou.getUsername());
-                user.put("role", ou.getRole());
-                user.put("connectedAt", ou.getConnectedAt());
-                result.add(user);
-            }
+        List<OnlineUser> batchResult = queryBatchByUids(uids);
+        for (OnlineUser ou : batchResult) {
+            Map<String, Object> user = new HashMap<>();
+            user.put("uid", ou.getUid());
+            user.put("username", ou.getUsername());
+            user.put("role", ou.getRole());
+            user.put("connectedAt", ou.getConnectedAt());
+            result.add(user);
         }
         return result;
+    }
+
+    /**
+     * 批量查询在线用户，避免 N+1 问题
+     */
+    private List<OnlineUser> queryBatchByUids(Set<Object> uidSet) {
+        if (uidSet == null || uidSet.isEmpty()) return Collections.emptyList();
+        List<String> uidList = uidSet.stream().map(Object::toString).collect(Collectors.toList());
+        LambdaQueryWrapper<OnlineUser> query = new LambdaQueryWrapper<>();
+        query.in(OnlineUser::getUid, uidList);
+        return onlineUserMapper.selectList(query);
+    }
+
+    /**
+     * 获取房间在线观众，按主播/参与人员分类
+     */
+    public RoomUserListResponse getRoomOnlineUsersCategorized(String roomId) {
+        Set<Object> uids = redisTemplate.opsForSet().members(RedisKeys.roomUsers(roomId));
+        RoomUserListResponse resp = new RoomUserListResponse();
+        if (uids == null || uids.isEmpty()) {
+            resp.setHosts(Collections.emptyList());
+            resp.setParticipants(Collections.emptyList());
+            return resp;
+        }
+
+        // 获取 publisherUid（优先从缓存读取）
+        String publisherUid = getPublisherUid(roomId);
+
+        List<Map<String, Object>> hosts = new ArrayList<>();
+        List<Map<String, Object>> participants = new ArrayList<>();
+        // 批量查询，避免 N+1
+        List<OnlineUser> batchResult = queryBatchByUids(uids);
+
+        for (OnlineUser ou : batchResult) {
+            Map<String, Object> user = new HashMap<>();
+            user.put("uid", ou.getUid());
+            user.put("username", ou.getUsername());
+            user.put("role", ou.getRole());
+            user.put("connectedAt", ou.getConnectedAt());
+
+            if (publisherUid != null && publisherUid.equals(ou.getUid())) {
+                hosts.add(user);
+            } else {
+                participants.add(user);
+            }
+        }
+
+        resp.setHosts(hosts);
+        resp.setParticipants(participants);
+        resp.setHostCount(hosts.size());
+        resp.setParticipantCount(participants.size());
+        resp.setTotalCount(hosts.size() + participants.size());
+        return resp;
+    }
+
+    /**
+     * 获取房间主播 uid（带 Redis 缓存，TTL 60s）
+     */
+    private String getPublisherUid(String roomId) {
+        String cacheKey = RedisKeys.roomPublisher(roomId);
+        Object cached = redisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return cached.toString();
+        }
+        LambdaQueryWrapper<Room> roomQuery = new LambdaQueryWrapper<>();
+        Room room = roomMapper.selectOne(roomQuery.eq(Room::getRoomId, roomId));
+        String publisherUid = room != null ? room.getPublisherUid() : null;
+        if (publisherUid != null) {
+            redisTemplate.opsForValue().set(cacheKey, publisherUid, 60, TimeUnit.SECONDS);
+        }
+        return publisherUid;
     }
 
     public long getOnlineCount() {

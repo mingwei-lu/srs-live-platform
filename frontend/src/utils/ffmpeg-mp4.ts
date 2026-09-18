@@ -1,94 +1,34 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 
-const CACHE_NAME = 'ffmpeg-wasm-cache-v1'
-const FFMPEG_VERSION = '0.12.15'
-const BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@${FFMPEG_VERSION}/dist/umd`
+// 通过 Vite proxy 代理到 CDN，变同源请求，规避跨域隔离/CSP 问题
+const CORE_URL = '/ffmpeg-core/esm/ffmpeg-core.js'
+const WASM_URL = '/ffmpeg-core/umd/ffmpeg-core.wasm'
 
 let ffmpegInstance: FFmpeg | null = null
 let loadPromise: Promise<FFmpeg> | null = null
 
 /**
- * 获取 ffmpeg.wasm 实例（带缓存加速）
+ * 获取 ffmpeg.wasm 实例（单例）
  */
 export async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance?.loaded) return ffmpegInstance
   if (loadPromise) return loadPromise
 
-  loadPromise = loadFFmpegWithCache()
+  loadPromise = (async () => {
+    const ffmpeg = new FFmpeg()
+
+    ffmpeg.on('log', ({ message }: { message: string }) => {
+      console.log('[ffmpeg]', message)
+    })
+
+    await ffmpeg.load({ coreURL: CORE_URL, wasmURL: WASM_URL })
+
+    return ffmpeg
+  })()
+
   ffmpegInstance = await loadPromise
   loadPromise = null
   return ffmpegInstance
-}
-
-/**
- * 从缓存加载 ffmpeg.wasm，首次下载后缓存到 CacheStorage
- */
-async function loadFFmpegWithCache(): Promise<FFmpeg> {
-  let cache: Cache | null = null
-  try {
-    if ('caches' in self) {
-      cache = await caches.open(CACHE_NAME)
-    }
-  } catch (e) {
-    console.warn('[ffmpeg] CacheStorage unavailable:', e)
-  }
-
-  // 尝试从缓存获取核心文件
-  let coreBlob = cache ? await getCacheBlob(cache, `${BASE_URL}/ffmpeg-core.js`) : null
-  let wasmBlob = cache ? await getCacheBlob(cache, `${BASE_URL}/ffmpeg-core.wasm`) : null
-
-  // 缓存未命中则从网络下载
-  if (!coreBlob) {
-    coreBlob = await fetchAndCache(cache, `${BASE_URL}/ffmpeg-core.js`)
-  }
-  if (!wasmBlob) {
-    wasmBlob = await fetchAndCache(cache, `${BASE_URL}/ffmpeg-core.wasm`)
-  }
-
-  const ffmpeg = new FFmpeg()
-
-  // 日志输出
-  ffmpeg.on('log', ({ message }: { message: string }) => {
-    console.log('[ffmpeg]', message)
-  })
-
-  await ffmpeg.load({
-    coreURL: URL.createObjectURL(coreBlob),
-    wasmURL: URL.createObjectURL(wasmBlob),
-  })
-
-  return ffmpeg
-}
-
-async function getCacheBlob(cache: Cache | null, url: string): Promise<Blob | null> {
-  if (!cache) return null
-  try {
-    const response = await cache.match(url)
-    if (response) {
-      console.log('[ffmpeg-cache] hit:', url)
-      return response.blob()
-    }
-  } catch (e) {
-    console.warn('[ffmpeg-cache] read error:', e)
-  }
-  return null
-}
-
-async function fetchAndCache(cache: Cache | null, url: string): Promise<Blob> {
-  console.log('[ffmpeg-cache] fetching:', url)
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`Failed to fetch ${url}: ${response.status}`)
-  }
-  const blob = await response.blob()
-  if (cache) {
-    try {
-      await cache.put(url, new Response(blob, { status: 200, statusText: 'OK' }))
-    } catch (e) {
-      console.warn('[ffmpeg-cache] write error:', e)
-    }
-  }
-  return blob
 }
 
 /**
